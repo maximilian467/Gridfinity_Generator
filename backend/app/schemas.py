@@ -21,8 +21,10 @@ class ObjectSpec(BaseModel):
     length_mm: float = 0.0
     width_mm: float = 0.0
     profile: Profile | None = None
-    side_flip_lr: bool = False
+    side_flip_lr: bool | None = None      # None = automatisch
     side_flip_ud: bool = False
+    flip_lr_used: bool | None = None
+    tilt_deg: float = 0.0
     calipers: dict[str, float] = {}
     warnings: list[str] = []
     photos: dict[str, dict] = {}
