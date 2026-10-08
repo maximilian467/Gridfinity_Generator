@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, DownloadSimple, Plus, Trash } from '@phosphor-icons/react'
+import { ArrowClockwise, CheckCircle, DownloadSimple, Plus, Rows, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import type { Compartment, GripRecess, InsertSpec, ObjectSpec } from '../../lib/types'
-import { Check, Field, Msgs, NumberField, Segmented } from '../../components/ui'
+import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
+import { arrange, placeNew } from '../../lib/placement'
 import { Editor2D } from './Editor2D'
 import type { Sel } from './Editor2D'
 
@@ -50,10 +51,16 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const dSpec = useDebounced(spec, 300)
   const first = useRef(true)
   const saveT = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const [saveState, setSaveState] = useState<'saved' | 'pending' | 'error'>('saved')
   useEffect(() => {
     if (first.current) { first.current = false; return }
+    setSaveState('pending')
     clearTimeout(saveT.current)
-    saveT.current = setTimeout(() => { api.saveInsert(spec).then(() => qc.invalidateQueries({ queryKey: ['inserts'] })) }, 800)
+    saveT.current = setTimeout(() => {
+      api.saveInsert(spec)
+        .then(() => { setSaveState('saved'); qc.invalidateQueries({ queryKey: ['inserts'] }) })
+        .catch(() => setSaveState('error'))
+    }, 800)
     return () => clearTimeout(saveT.current)
   }, [spec, qc])
 
@@ -84,11 +91,21 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   }
 
   const usable = (objects.data ?? []).filter((o) => o.profile)
-  const addObject = (oid: string) => patch({
-    placements: [...spec.placements, { object_id: oid, x: 6 + spec.placements.length * 4, y: 8 + spec.placements.length * 4, rot_deg: 0, side_down: 'A' }],
-  })
-  const addGrip = () => patch({ grip_recesses: [...spec.grip_recesses, { shape: 'stadium', x: 30, y: 30, w: 14, l: 30, rot_deg: 0, depth_below: 10 }] })
-  const addComp = () => patch({ compartments: [...spec.compartments, { x: 10, y: 10, w: 25, l: 25, radius: 3, depth: 15 }] })
+  const addObject = (oid: string) => objMap[oid] && patch({ placements: [...spec.placements, placeNew(spec, objMap, objMap[oid])] })
+  const doArrange = () => patch({ placements: arrange(spec, objMap) })
+  const addGrip = () => {
+    // Standard: quer über die Mitte des ersten Objekts (dort greift man meist zu)
+    const p = spec.placements[0], o = p && objMap[p.object_id]
+    const g = o
+      ? { x: p.x + (o.length_mm / 2) * Math.cos((p.rot_deg * Math.PI) / 180), y: p.y + (o.length_mm / 2) * Math.sin((p.rot_deg * Math.PI) / 180), l: o.width_mm + 16, rot: p.rot_deg + 90 }
+      : { x: 30, y: 30, l: 30, rot: 0 }
+    patch({ grip_recesses: [...spec.grip_recesses, { shape: 'stadium', x: Math.round(g.x), y: Math.round(g.y), w: 16, l: Math.round(g.l), rot_deg: g.rot % 360, depth_below: 10 }] })
+    setSel({ kind: 'grip', index: spec.grip_recesses.length })
+  }
+  const addComp = () => {
+    patch({ compartments: [...spec.compartments, { x: 10, y: 10, w: 25, l: 25, radius: 3, depth: 15 }] })
+    setSel({ kind: 'comp', index: spec.compartments.length })
+  }
 
   const lay = layout.data
   const warnings = lay?.warnings ?? []
@@ -100,6 +117,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         <Field label="Name"><input className="input" value={spec.name} onChange={(e) => patch({ name: e.target.value })} /></Field>
         <section className="grid gap-2">
           <h3 className="sect">Größe</h3>
+          <div className="hint mt-0">Automatisch: kleinstes Raster und kleinste Höhe, in die alles passt.</div>
           <Check label="Raster automatisch" checked={spec.grid_x === null}
             onChange={(v) => patch(v ? { grid_x: null, grid_y: null } : { grid_x: lay?.grid_x ?? 3, grid_y: lay?.grid_y ?? 3 })} />
           {spec.grid_x !== null && (
@@ -118,6 +136,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
         <section className="grid gap-2">
           <h3 className="sect">Spiel</h3>
+          <div className="hint mt-0">Luft zwischen Werkzeug und Taschenwand. Für den Anfang "Normal" wählen und mit dem Passform-Test prüfen.</div>
           <Segmented value={[0.3, 1.0, 2.0].includes(spec.clearance_xy) ? spec.clearance_xy : -1}
             onChange={(v) => v > 0 && patch({ clearance_xy: v })}
             options={[{ value: 0.3, label: 'Presspassung' }, { value: 1.0, label: 'Normal' }, { value: 2.0, label: 'Locker' }, { value: -1, label: 'Frei' }]} />
@@ -159,29 +178,56 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
       </aside>
 
       {/* Mitte */}
-      <section className="min-w-0 p-3 grid grid-cols-[minmax(0,1fr)] gap-3 content-start">
-        <div className="flex flex-wrap items-center gap-2">
-          <Segmented value={tab} onChange={setTab} options={[{ value: 'layout', label: 'Layout' }, { value: '3d', label: '3D-Vorschau' }]} />
+      <section className="min-w-0 p-4 grid grid-cols-[minmax(0,1fr)] gap-3 content-start">
+        <header className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-semibold tracking-tight mr-2">{spec.name || 'Einlage'}</h1>
+          {lay && <span className="chip num">{lay.grid_x} x {lay.grid_y} Einheiten · {lay.height_u * 7} mm hoch</span>}
+          <span className={`chip ${saveState === 'error' ? 'chip-err' : saveState === 'saved' ? 'chip-ok' : ''}`}>
+            {saveState === 'saved' ? <><CheckCircle size={14} /> Gespeichert</> : saveState === 'pending' ? 'Speichere …' : <><XCircle size={14} /> Nicht gespeichert</>}
+          </span>
           <div className="flex-1" />
-          {usable.length > 0 && (
-            <select className="input" style={{ width: 200 }} value="" onChange={(e) => e.target.value && addObject(e.target.value)} aria-label="Objekt hinzufügen">
-              <option value="">Objekt hinzufügen …</option>
-              {usable.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-            </select>
-          )}
-          <button className="btn btn-sm" onClick={addGrip}><Plus size={14} /> Greifmulde</button>
-          <button className="btn btn-sm" onClick={addComp}><Plus size={14} /> Fach</button>
-          <button className="btn btn-sm" onClick={() => autoComp.mutate()} disabled={autoComp.isPending || !spec.placements.length}>Fächer vorschlagen</button>
-        </div>
+          <Segmented value={tab} onChange={setTab} options={[{ value: 'layout', label: 'Layout (2D)' }, { value: '3d', label: '3D-Vorschau' }]} />
+        </header>
+
+        {tab === 'layout' && (
+          <div className="flex flex-wrap items-center gap-2 panel p-2">
+            {usable.length > 0 && (
+              <select className="input" style={{ width: 210 }} value="" onChange={(e) => e.target.value && addObject(e.target.value)} aria-label="Objekt hinzufügen">
+                <option value="">+ Objekt hinzufügen …</option>
+                {usable.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            )}
+            <button className="btn btn-sm" onClick={doArrange} disabled={!spec.placements.length} title="Objekte an die Innenecke rücken und untereinander anordnen"><Rows size={14} /> Anordnen</button>
+            <span className="w-px h-6" style={{ background: 'var(--line)' }} />
+            <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length}><Plus size={14} /> Greifmulde</button>
+            <button className="btn btn-sm" onClick={addComp}><Plus size={14} /> Fach</button>
+            <button className="btn btn-sm" onClick={() => autoComp.mutate()} disabled={autoComp.isPending || !spec.placements.length}>Fächer vorschlagen</button>
+          </div>
+        )}
 
         {tab === 'layout' && (
           <>
             {usable.length === 0 && objects.isSuccess && (
-              <div className="msg msg-warn">Es gibt noch kein fertig gescanntes Objekt. In der Bibliothek ein Objekt scannen oder die Demo-Zange anlegen.
-                <button className="btn btn-sm ml-2" onClick={() => nav('/')}>Zur Bibliothek</button></div>
+              <Msg kind="warn">Es gibt noch kein fertig gescanntes Objekt. In der Bibliothek ein Objekt scannen oder die Demo-Zange anlegen.
+                <button className="btn btn-sm ml-2" onClick={() => nav('/')}>Zur Bibliothek</button></Msg>
             )}
-            {layout.isError && <div className="msg msg-err">{String(layout.error).replace('Error: ', '')}</div>}
-            <div className="panel p-2"><Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={setSel} onMove={move} proposals={proposals} /></div>
+            {layout.isError && <Msg kind="err">{errText(layout.error)}</Msg>}
+            {spec.placements.length === 0 && usable.length > 0 && (
+              <Msg kind="info">Noch kein Werkzeug in dieser Einlage. Oben über "Objekt hinzufügen" ein gescanntes Werkzeug wählen.</Msg>
+            )}
+            <div className="panel p-2 relative">
+              {layout.isFetching && <div className="absolute inset-x-2 top-1"><BusyBar /></div>}
+              <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={setSel} onMove={move} proposals={proposals} />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm" style={{ color: 'var(--ink-2)' }}>
+              <span className="inline-flex items-center gap-2">
+                <span className="swatch" style={{ width: 48, background: 'linear-gradient(90deg, color-mix(in srgb, var(--accent) 20%, transparent), var(--accent))' }} />
+                Tasche: je dunkler, desto tiefer (Zahl = Tiefe in mm)
+              </span>
+              <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'color-mix(in srgb, var(--blue) 45%, transparent)' }} /> Greifmulde</span>
+              <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'color-mix(in srgb, var(--green) 45%, transparent)' }} /> Fach</span>
+              <span className="inline-flex items-center gap-2"><span className="swatch" style={{ border: '1px dashed var(--ink-3)' }} /> nutzbarer Innenbereich</span>
+            </div>
             {proposals.length > 0 && (
               <div className="panel p-3 flex items-center gap-3 flex-wrap">
                 <span>{proposals.length} Fach-Vorschläge (gestrichelt)</span>
@@ -189,27 +235,34 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
                 <button className="btn btn-sm" onClick={() => setProposals([])}>Verwerfen</button>
               </div>
             )}
-            <Msgs items={warnings} />
-            <div className="hint">Elemente per Maus verschieben. Zahlen in den Flächen: Tiefe unter der Oberkante in mm.</div>
+            {warnings.map((w, i) => (
+              <Msg key={i} kind="warn">{w}
+                {/Innenbereich|überlappen|Wand zwischen/.test(w) && spec.placements.length > 0 &&
+                  <button className="btn btn-sm ml-2" onClick={doArrange}><Rows size={14} /> Automatisch anordnen</button>}
+              </Msg>
+            ))}
+            <div className="hint">Elemente mit der Maus verschieben, anklicken für genaue Maße (rechts).</div>
           </>
         )}
         {tab === '3d' && (
           job.data?.status === 'done' && job.data.outputs.glb ? (
             <>
-              {outdated && <div className="msg msg-warn">Die Einlage wurde seit dem letzten Build geändert. Bitte neu erzeugen.</div>}
+              {outdated && <Msg kind="warn">Die Einlage wurde seit dem letzten Erzeugen geändert. Die Vorschau zeigt den alten Stand.
+                <button className="btn btn-sm ml-2" onClick={() => build.mutate()}>Neu erzeugen</button></Msg>}
               <Suspense fallback={<div className="skeleton" style={{ height: 520 }} />}><Preview3D url={job.data.outputs.glb} /></Suspense>
             </>
           ) : (
             <div className="panel grid place-items-center gap-3 p-10 text-center" style={{ minHeight: 320 }}>
               {job.data?.status === 'running' || build.isPending ? (
-                <><div className="skeleton h-3 w-64" /><div>Erzeuge 3D-Modell … {Math.round((job.data?.progress ?? 0.05) * 100)} %</div></>
+                <div className="w-80"><BusyBar label="Erzeuge 3D-Modell mit Farbteilen. Das dauert 10 bis 40 Sekunden." /></div>
               ) : (
                 <>
-                  <div>Das 3D-Modell mit Farbteilen entsteht serverseitig und braucht einige Sekunden.</div>
-                  <button className="btn btn-primary" onClick={() => build.mutate()}>3D erzeugen</button>
+                  <div className="max-w-[48ch]" style={{ color: 'var(--ink-2)' }}>Das echte 3D-Modell (Tasche, Stufen, Farbteile, Gridfinity-Füße) wird auf dem Server berechnet und anschließend auf Fehler geprüft.</div>
+                  <button className="btn btn-primary" onClick={() => build.mutate()} disabled={!spec.placements.length}>3D erzeugen</button>
                 </>
               )}
-              {job.data?.status === 'error' && <div className="msg msg-err">{job.data.error}</div>}
+              {job.data?.status === 'error' && <Msg kind="err">{job.data.error}</Msg>}
+              {build.isError && <Msg kind="err">{errText(build.error)}</Msg>}
             </div>
           )
         )}
@@ -222,12 +275,16 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
         <section className="grid gap-2">
           <h3 className="sect">Export</h3>
-          <button className="btn btn-primary justify-center" disabled={build.isPending || job.data?.status === 'running' || !spec.placements.length}
+          <div className="hint mt-0">1. Modell erzeugen, 2. Dateien laden. Zuerst den Passform-Test drucken, um das Spiel zu prüfen.</div>
+          <button className="btn btn-primary justify-center" disabled={build.isPending || job.data?.status === 'running' || !spec.placements.length || warnings.some((w) => /Innenbereich/.test(w))}
             onClick={() => build.mutate()}>
-            <ArrowClockwise size={16} /> {job.data?.status === 'running' ? 'Erzeuge …' : '3D erzeugen und exportieren'}
+            <ArrowClockwise size={16} /> {job.data?.status === 'running' ? 'Erzeuge …' : job.data?.status === 'done' ? 'Neu erzeugen' : '3D erzeugen'}
           </button>
-          {build.isError && <div className="msg msg-err">{String(build.error).replace('Error: ', '')}</div>}
-          {job.data?.status === 'error' && <div className="msg msg-err">{job.data.error}</div>}
+          {warnings.some((w) => /Innenbereich/.test(w)) && <div className="hint mt-0">Erst möglich, wenn alle Taschen in der Einlage liegen.</div>}
+          {!spec.placements.length && <div className="hint mt-0">Zuerst ein Objekt hinzufügen.</div>}
+          {(job.data?.status === 'running' || build.isPending) && <BusyBar label="Berechne …" />}
+          {build.isError && <Msg kind="err">{errText(build.error)}</Msg>}
+          {job.data?.status === 'error' && <Msg kind="err">{job.data.error}</Msg>}
           {job.data?.status === 'done' && (
             <>
               <div className="grid gap-1">
@@ -257,9 +314,11 @@ function Checks({ job }: { job: NonNullable<ReturnType<typeof useQuery<import('.
   ]
   return (
     <div className="grid gap-1 text-sm">
+      <h3 className="sect mt-2">Prüfung</h3>
       {rows.map(([label, ok]) => (
-        <div key={label} className="flex justify-between"><span>{label}</span>
-          <b style={{ color: ok ? 'var(--ok)' : 'var(--err)' }}>{ok ? 'ok' : 'FEHLER'}</b></div>
+        <div key={label} className="flex items-center gap-2">
+          {ok ? <CheckCircle size={16} weight="fill" color="var(--ok)" /> : <XCircle size={16} weight="fill" color="var(--err)" />}
+          <span>{label}</span></div>
       ))}
       <div className="num hint">
         {c.grid_x} x {c.grid_y} x {c.height_u} U · {Math.round(c.volume_mm3 / 1000)} cm³ · ca. {c.weight_g} g PLA
@@ -273,7 +332,12 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, proposals, acceptPr
   spec: InsertSpec; sel: Sel; setSpec: (f: (s: InsertSpec) => InsertSpec) => void; onSel: (s: Sel) => void
   objMap: Record<string, ObjectSpec>; proposals: Compartment[]; acceptProposal: (i: number) => void
 }) {
-  if (!sel) return <div className="hint">Ein Element im Layout anklicken, um Position und Maße zu ändern.</div>
+  if (!sel) return (
+    <div className="grid gap-2">
+      <h3 className="sect">Auswahl</h3>
+      <div className="hint mt-0">Ein Element im Layout anklicken, um Position, Drehung und Maße genau einzustellen.</div>
+    </div>
+  )
   const remove = () => {
     setSpec((s) => ({
       ...s,

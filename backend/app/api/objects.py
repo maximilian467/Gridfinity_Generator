@@ -170,6 +170,13 @@ def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, 
     tint[m] = (0.45 * tint[m] + 0.55 * np.array([30, 120, 255])).astype(np.uint8)
     cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     cv2.drawContours(tint, cnts, -1, (0, 60, 255), 1)
+    hand_f = storage.object_dir(spec.id) / f"{view}_hand.png"
+    if hand is not None and hand.any():
+        cv2.imwrite(str(hand_f), hand)
+        ph["hand_url"] = storage.url_for(hand_f)
+    elif hand is not None:
+        hand_f.unlink(missing_ok=True)
+        ph.pop("hand_url", None)
     if hand is not None and hand.any():
         hm = cv2.resize(hand, (over.shape[1], over.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
         stripes = ((np.add.outer(np.arange(hm.shape[0]), np.arange(hm.shape[1])) // 6) % 2 == 0)
@@ -179,7 +186,7 @@ def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, 
     ph["mask_url"] = storage.url_for(d / f"{view}_mask.png")
     ph["overlay_url"] = storage.url_for(d / f"{view}_overlay.jpg")
     ph["fill_holes"] = fill_holes
-    info: dict = {"mask_url": ph["mask_url"], "overlay_url": ph["overlay_url"]}
+    info: dict = {"mask_url": ph["mask_url"], "overlay_url": ph["overlay_url"], "hand_url": ph.get("hand_url")}
     try:
         poly = contour.mask_to_polygon(mask, fill_holes)
         info["contour_px"] = (a4.mm_to_rect_px(np.asarray(poly.exterior.coords)) * VIEW_SCALE).round(1).tolist()
@@ -209,7 +216,7 @@ def run_segment(oid: str, view: str, body: SegmentBody) -> dict:
     if mask.max() == 0:
         raise HTTPException(422, "Kein Werkzeug gefunden. Ecken prüfen oder mit 'Auswählen' auf das Werkzeug klicken.")
     hand_info: dict = {"hand_removed": False}
-    hand = None
+    hand = np.zeros_like(mask) if view == "side" else None
     ph.pop("cut_point_mm", None)
     top_mask_f = storage.object_dir(oid) / "top_mask.png"
     if view == "side" and body.remove_hand and top_mask_f.exists() and "top" in spec.photos:

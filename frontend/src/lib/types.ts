@@ -16,6 +16,8 @@ export interface PhotoMeta {
   rect_size?: [number, number]
   mask_url?: string
   overlay_url?: string
+  hand_url?: string
+  cut_point_mm?: [number, number]
   fill_holes?: boolean
 }
 
@@ -31,6 +33,7 @@ export interface ObjectSpec {
   side_flip_ud: boolean
   flip_lr_used: boolean | null
   tilt_deg: number
+  profile_missing: boolean[]
   calipers: Record<string, number>
   warnings: string[]
   photos: Record<string, PhotoMeta>

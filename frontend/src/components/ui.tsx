@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { CheckCircle, Info, WarningCircle, XCircle } from '@phosphor-icons/react'
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
@@ -69,7 +71,7 @@ export function Stepper({ steps, current, onGo }: { steps: string[]; current: nu
   return (
     <ol className="flex flex-wrap gap-x-1 gap-y-1 m-0 p-0 list-none">
       {steps.map((s, i) => (
-        <li key={s}>
+        <li key={i}>
           <button className={`btn btn-sm ${i === current ? 'btn-on' : 'btn-quiet'}`} onClick={() => onGo(i)}
             aria-current={i === current ? 'step' : undefined}>
             <span className="num">{i + 1}</span> {s}
@@ -80,11 +82,53 @@ export function Stepper({ steps, current, onGo }: { steps: string[]; current: nu
   )
 }
 
-export function Msgs({ items, kind = 'warn' }: { items?: string[]; kind?: 'warn' | 'err' | 'ok' }) {
+const MSG_ICON = { warn: WarningCircle, err: XCircle, ok: CheckCircle, info: Info }
+
+export function Msg({ kind = 'info', children }: { kind?: 'warn' | 'err' | 'ok' | 'info'; children: ReactNode }) {
+  const Icon = MSG_ICON[kind]
+  return <div className={`msg msg-${kind}`} role={kind === 'err' ? 'alert' : undefined}><Icon size={18} className="shrink-0 mt-px" /><div>{children}</div></div>
+}
+
+export function Msgs({ items, kind = 'warn' }: { items?: string[]; kind?: 'warn' | 'err' | 'ok' | 'info' }) {
   if (!items?.length) return null
   return (
-    <div className="grid gap-1">
-      {items.map((m, i) => <div key={i} className={`msg msg-${kind}`}>{m}</div>)}
+    <div className="grid gap-1.5">
+      {items.map((m, i) => <Msg key={i} kind={kind}>{m}</Msg>)}
+    </div>
+  )
+}
+
+export function errText(e: unknown): string {
+  const s = String(e instanceof Error ? e.message : e)
+  if (/Failed to fetch|NetworkError|ECONNREFUSED|502|504/.test(s)) return 'Backend nicht erreichbar. Läuft scripts/dev.ps1 noch?'
+  return s.replace(/^Error: /, '')
+}
+
+export function BusyBar({ label }: { label?: string }) {
+  return (
+    <div className="grid gap-1.5" aria-live="polite">
+      <div className="busybar" />
+      {label && <div className="text-sm" style={{ color: 'var(--ink-2)' }}>{label}</div>}
+    </div>
+  )
+}
+
+export function Stat({ k, v, unit }: { k: string; v: ReactNode; unit?: string }) {
+  return <div className="stat"><span className="k">{k}</span><span className="v">{v}{unit && <span className="text-sm font-normal" style={{ color: 'var(--ink-3)' }}> {unit}</span>}</span></div>
+}
+
+/** Pollt /api/health und zeigt einen Hinweis, wenn das Backend weg ist. */
+export function ApiStatus() {
+  const q = useQuery({
+    queryKey: ['health'],
+    queryFn: async () => { const r = await fetch('/api/health'); if (!r.ok) throw new Error(String(r.status)); return r.json() },
+    refetchInterval: (qq) => (qq.state.status === 'error' ? 2000 : 8000),
+    retry: false,
+  })
+  if (!q.isError) return null
+  return (
+    <div className="px-4 py-2 text-sm flex items-center gap-2" style={{ background: 'var(--err)', color: '#fff' }} role="alert">
+      <XCircle size={16} /> Keine Verbindung zum Backend. Aktionen funktionieren erst wieder, wenn es läuft (scripts/dev.ps1). Ich prüfe automatisch weiter.
     </div>
   )
 }

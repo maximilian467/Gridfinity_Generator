@@ -4,6 +4,7 @@ import { lazy, Suspense, useState } from 'react'
 import { Moon, SquaresFour, Sun } from '@phosphor-icons/react'
 import { getTheme, setTheme } from './lib/theme'
 import { Library } from './features/library/Library'
+import { ApiStatus } from './components/ui'
 
 const ScanWizard = lazy(() => import('./features/scan/ScanWizard').then((m) => ({ default: m.ScanWizard })))
 const Designer = lazy(() => import('./features/insert/Designer').then((m) => ({ default: m.Designer })))
@@ -31,6 +32,7 @@ function Shell() {
           {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />} {theme === 'dark' ? 'Hell' : 'Dunkel'}
         </button>
       </header>
+      <ApiStatus />
       <main className="flex-1 min-h-0">
         <Suspense fallback={<div className="p-6"><div className="skeleton h-8 w-64" /></div>}>
           <Outlet />

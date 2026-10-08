@@ -26,6 +26,18 @@ export function Library() {
 
   return (
     <div className="max-w-[1200px] mx-auto px-4 py-6 grid gap-10">
+      <section className="panel p-4 grid gap-3 md:grid-cols-3">
+        {[
+          ['1', 'Werkzeug scannen', 'Zwei Fotos auf einem A4-Blatt: von oben und hochkant. Das Blatt ist der Maßstab.'],
+          ['2', 'Einlage gestalten', 'Werkzeug platzieren, Spiel einstellen, Greifmulden und Fächer ergänzen.'],
+          ['3', 'Drucken', 'Erst den Passform-Test, dann die Einlage als 3MF mit Farbteilen für Bambu Studio oder Orca.'],
+        ].map(([n, t, d]) => (
+          <div key={n} className="flex gap-3">
+            <span className="num grid place-items-center shrink-0 w-7 h-7 rounded-full font-semibold" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>{n}</span>
+            <div><div className="font-semibold">{t}</div><div className="text-sm" style={{ color: 'var(--ink-2)' }}>{d}</div></div>
+          </div>
+        ))}
+      </section>
       <section className="grid gap-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-semibold tracking-tight">Gescannte Objekte</h1>

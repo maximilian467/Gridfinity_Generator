@@ -1,3 +1,8 @@
+export interface SegmentResult {
+  mask_url: string; overlay_url: string; contour_px: number[][]; area_mm2?: number
+  touches_paper_edge?: boolean; sam_used?: boolean; hand_removed?: boolean; hand_frac?: number; hand_url?: string | null
+}
+
 import type { BaseplateSpec, InsertSpec, Job, LayoutOut, ObjectSpec, PhotoMeta } from './types'
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -26,8 +31,8 @@ export const api = {
   },
   setCorners: (id: string, view: string, corners_px: number[][]) =>
     req<PhotoMeta>(`/objects/${id}/photos/${view}/corners`, json('PUT', { corners_px })),
-  segment: (id: string, view: string, body: { pos: number[][]; neg: number[][]; fill_holes: boolean }) =>
-    req<{ mask_url: string; overlay_url: string; contour_px: number[][]; touches_paper_edge?: boolean; sam_used?: boolean }>(
+  segment: (id: string, view: string, body: { pos: number[][]; neg: number[][]; fill_holes: boolean; remove_hand?: boolean }) =>
+    req<SegmentResult>(
       `/objects/${id}/photos/${view}/segment`, json('POST', body)),
   uploadMask: (id: string, view: string, blob: Blob, fill_holes: boolean) => {
     const fd = new FormData(); fd.append('file', blob, 'mask.png')

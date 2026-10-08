@@ -105,3 +105,28 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
 .msg-warn { border-color: var(--warn); color: var(--warn); }
 .msg-err { border-color: var(--err); color: var(--err); }
 .msg-ok { border-color: var(--ok); color: var(--ok); }
+
+/* Laufende Vorgänge: dünner, wandernder Balken (statt Kreis-Spinner) */
+.busybar { position: relative; height: 3px; overflow: hidden; background: var(--accent-soft); border-radius: 2px; }
+.busybar::after { content: ""; position: absolute; inset: 0; width: 35%; background: var(--accent);
+  animation: busy 1.1s ease-in-out infinite; }
+@keyframes busy { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) { .busybar::after { animation: none; width: 100%; opacity: .6; } }
+
+.msg { display: flex; gap: 8px; align-items: flex-start; background: var(--surface); }
+.msg-info { border-color: var(--line-2); color: var(--ink-2); }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 500; border: 1px solid var(--line-2); color: var(--ink-2); background: var(--surface); white-space: nowrap; }
+.chip-ok { border-color: var(--ok); color: var(--ok); }
+.chip-warn { border-color: var(--warn); color: var(--warn); }
+.chip-err { border-color: var(--err); color: var(--err); }
+.swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
+
+.stat { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.stat .v { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.stat .k { font-size: 12px; color: var(--ink-3); }
+
+.actionbar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; background: var(--surface); border-top: 1px solid var(--line); }
+.kbd { font-family: var(--font-mono); font-size: 12px; padding: 1px 5px; border: 1px solid var(--line-2); border-radius: 3px; }

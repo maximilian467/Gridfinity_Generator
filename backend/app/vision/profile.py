@@ -233,6 +233,13 @@ def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, si
                                 lambda s, p=prof: np.interp(s, p.s, maximum_filter1d(p.top, win, mode="nearest")))
         top_c_frame = pca_frame(top_c)
 
+    # Plausibilität: unbrauchbares Seitenprofil (z. B. Hand im Umriss) darf die Draufsicht nicht zerstören
+    raw_w = top_loc.bounds[3] - top_loc.bounds[1]
+    implausible = float(prof.top.max()) > 1.5 * raw_w or top_c.area < 0.8 * top_poly.area
+    if implausible:
+        warns.append("Seitenprofil unplausibel (viel dicker als breit). Ist die Hand noch im Umriss der Seitenansicht? "
+                     "Die Draufsicht wurde deshalb nicht korrigiert.")
+        top_c, top_c_frame = top_poly, f_top
     loc = polygon_local(top_c, top_c_frame)
     contour = np.asarray(loc.exterior.coords)[:-1]
     L = float(contour[:, 0].max() - contour[:, 0].min())
