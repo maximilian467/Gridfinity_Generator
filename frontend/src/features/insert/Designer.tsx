@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, CheckCircle, DownloadSimple, Plus, Rows, Trash, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, CheckCircle, CrosshairSimple, DownloadSimple, Plus, Rows, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import type { Compartment, GripRecess, InsertSpec, ObjectSpec } from '../../lib/types'
 import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
@@ -10,6 +10,18 @@ import { Editor2D } from './Editor2D'
 import type { Sel } from './Editor2D'
 
 const Preview3D = lazy(() => import('./Preview3D').then((m) => ({ default: m.Preview3D })))
+
+/** Zentrierungs-Verschiebung fest in alle Positionen übernehmen und Zentrierung ausschalten. */
+function bake(sp: InsertSpec, dx: number, dy: number): InsertSpec {
+  return {
+    ...sp, auto_center: false,
+    placements: sp.placements.map((p) => ({ ...p, x: round1(p.x + dx), y: round1(p.y + dy) })),
+    grip_recesses: sp.grip_recesses.map((g) => ({ ...g, x: round1(g.x + dx), y: round1(g.y + dy) })),
+    compartments: sp.compartments.map((c) => ({ ...c, x: round1(c.x + dx), y: round1(c.y + dy),
+      polygon: c.polygon ? c.polygon.map(([x, y]) => [x + dx, y + dy] as [number, number]) : c.polygon })),
+  }
+}
+const round1 = (v: number) => Math.round(v * 10) / 10
 
 function useDebounced<T>(v: T, ms: number): T {
   const [d, setD] = useState(v)
@@ -41,7 +53,6 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const [sel, setSel] = useState<Sel>(null)
   const [tab, setTab] = useState<'layout' | '3d'>('layout')
   const [jobId, setJobId] = useState<string | null>(null)
-  const [proposals, setProposals] = useState<Compartment[]>([])
   const patch = (p: Partial<InsertSpec>) => setSpec((s) => ({ ...s, ...p }))
 
   const objects = useQuery({ queryKey: ['objects'], queryFn: api.objects })
@@ -79,16 +90,24 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   })
   const outdated = job.data?.status === 'done' && built.current !== JSON.stringify(spec)
 
-  const autoComp = useMutation({ mutationFn: () => api.autoCompartments(spec), onSuccess: (r) => setProposals(r.compartments) })
 
   const move = (s: NonNullable<Sel>, x: number, y: number) => {
-    setSpec((sp) => {
-      if (s.kind === 'placement') return { ...sp, placements: sp.placements.map((p, i) => (i === s.index ? { ...p, x, y } : p)) }
-      if (s.kind === 'grip') return { ...sp, grip_recesses: sp.grip_recesses.map((p, i) => (i === s.index ? { ...p, x, y } : p)) }
-      if (s.kind === 'comp') return { ...sp, compartments: sp.compartments.map((p, i) => (i === s.index ? { ...p, x, y } : p)) }
+    // Wer von Hand verschiebt, will die Position behalten: automatische Zentrierung aus,
+    // aktuelle Verschiebung in die Positionen übernehmen, damit nichts springt.
+    const [dx, dy] = spec.auto_center && lay ? lay.shift : [0, 0]
+    setSpec((sp0) => {
+      const sp = sp0.auto_center ? bake(sp0, dx, dy) : sp0
+      if (s.kind === 'placement') return { ...sp, placements: sp.placements.map((p, i) => (i === s.index ? { ...p, x: round1(x + dx), y: round1(y + dy) } : p)) }
+      if (s.kind === 'grip') return { ...sp, grip_recesses: sp.grip_recesses.map((p, i) => (i === s.index ? { ...p, x: round1(x + dx), y: round1(y + dy) } : p)) }
+      if (s.kind === 'comp') return { ...sp, compartments: sp.compartments.map((p, i) => {
+        if (i !== s.index) return p
+        const nx = round1(x + dx), ny = round1(y + dy)
+        return { ...p, x: nx, y: ny, polygon: p.polygon ? p.polygon.map(([qx, qy]) => [qx + nx - p.x, qy + ny - p.y] as [number, number]) : p.polygon }
+      }) }
       return sp
     })
   }
+  const centerNow = () => setSpec((sp) => ({ ...sp, auto_center: true }))
 
   const usable = (objects.data ?? []).filter((o) => o.profile)
   const addObject = (oid: string) => objMap[oid] && patch({ placements: [...spec.placements, placeNew(spec, objMap, objMap[oid])] })
@@ -132,6 +151,33 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
           {lay && <div className="num hint">{lay.grid_x} x {lay.grid_y} Einheiten, {lay.height_u} U = {(lay.height_u * 7).toFixed(0)} mm</div>}
           <Check label="Stapelrand" checked={spec.stacking_lip} onChange={(v) => patch({ stacking_lip: v })} />
           <Check label="Magnetlöcher" checked={spec.magnets} onChange={(v) => patch({ magnets: v })} />
+        </section>
+
+        <section className="grid gap-2">
+          <h3 className="sect">Automatik</h3>
+          <Check label="Inhalt mittig ausrichten" checked={spec.auto_center} onChange={(v) => patch({ auto_center: v })} />
+          <Check label="Greifmulde unter dem Werkzeug" checked={spec.auto_grip} onChange={(v) => patch({ auto_grip: v })} />
+          {spec.auto_grip && (
+            <div className="grid grid-cols-2 gap-2 pl-6">
+              <NumberField label="Breite" value={spec.grip_width} step={1} min={8} onChange={(v) => patch({ grip_width: v })} />
+              <NumberField label="Überstand je Seite" value={spec.grip_overhang} step={1} min={0} onChange={(v) => patch({ grip_overhang: v })} />
+              <NumberField label="Tiefe unter Werkzeug" value={spec.grip_depth_below} step={1} min={2} onChange={(v) => patch({ grip_depth_below: v })} />
+            </div>
+          )}
+          {spec.auto_grip && <div className="hint mt-0 pl-6">Langloch quer am Schwerpunkt, Boden rund ausgeformt. Hier greift man unter das Werkzeug.</div>}
+          <Check label="Kästen in freien Flächen" checked={spec.auto_compartments} onChange={(v) => patch({ auto_compartments: v })} />
+          {spec.auto_compartments && (
+            <div className="grid grid-cols-2 gap-2 pl-6">
+              <NumberField label="Mindestgröße" value={spec.comp_min_size} step={1} min={10} onChange={(v) => patch({ comp_min_size: v })} />
+              <NumberField label="Wandstärke" value={spec.comp_wall} step={0.1} min={0.8} onChange={(v) => patch({ comp_wall: v })} />
+              <NumberField label="Tiefe (0 = max.)" value={spec.comp_depth ?? 0} step={1} min={0} onChange={(v) => patch({ comp_depth: v > 0 ? v : null })} />
+            </div>
+          )}
+          <label className="grid gap-1">
+            <span className="label mb-0">Kontur glätten <span className="num">{spec.smooth_mm.toFixed(1)} mm</span></span>
+            <input type="range" min={0} max={5} step={0.5} value={spec.smooth_mm} onChange={(e) => patch({ smooth_mm: +e.target.value })} />
+            <span className="hint mt-0">Füllt kleine Kerben und Zacken der Kontur. Die Tasche wird dabei nie kleiner als das Werkzeug.</span>
+          </label>
         </section>
 
         <section className="grid gap-2">
@@ -201,7 +247,14 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length}><Plus size={14} /> Greifmulde</button>
             <button className="btn btn-sm" onClick={addComp}><Plus size={14} /> Fach</button>
-            <button className="btn btn-sm" onClick={() => autoComp.mutate()} disabled={autoComp.isPending || !spec.placements.length}>Fächer vorschlagen</button>
+            <span className="w-px h-6" style={{ background: 'var(--line)' }} />
+            <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
+              <CrosshairSimple size={14} /> Mittig{spec.auto_center ? ' (aktiv)' : ''}
+            </button>
+            <button className={`btn btn-sm ${spec.auto_compartments ? 'btn-on' : ''}`} onClick={() => patch({ auto_compartments: !spec.auto_compartments })}
+              title="Freie Flächen automatisch mit Kästen füllen">
+              <SquaresFour size={14} /> Kästen{spec.auto_compartments ? ' (an)' : ''}
+            </button>
           </div>
         )}
 
@@ -217,7 +270,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             )}
             <div className="panel p-2 relative">
               {layout.isFetching && <div className="absolute inset-x-2 top-1"><BusyBar /></div>}
-              <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={setSel} onMove={move} proposals={proposals} />
+              <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={setSel} onMove={move} />
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm" style={{ color: 'var(--ink-2)' }}>
               <span className="inline-flex items-center gap-2">
@@ -228,13 +281,6 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'color-mix(in srgb, var(--green) 45%, transparent)' }} /> Fach</span>
               <span className="inline-flex items-center gap-2"><span className="swatch" style={{ border: '1px dashed var(--ink-3)' }} /> nutzbarer Innenbereich</span>
             </div>
-            {proposals.length > 0 && (
-              <div className="panel p-3 flex items-center gap-3 flex-wrap">
-                <span>{proposals.length} Fach-Vorschläge (gestrichelt)</span>
-                <button className="btn btn-sm btn-primary" onClick={() => { patch({ compartments: [...spec.compartments, ...proposals] }); setProposals([]) }}>Alle übernehmen</button>
-                <button className="btn btn-sm" onClick={() => setProposals([])}>Verwerfen</button>
-              </div>
-            )}
             {warnings.map((w, i) => (
               <Msg key={i} kind="warn">{w}
                 {/Innenbereich|überlappen|Wand zwischen/.test(w) && spec.placements.length > 0 &&
@@ -270,8 +316,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
       {/* Rechts */}
       <aside className="panel p-3 grid gap-4 content-start overflow-y-auto" style={{ borderRadius: 0, borderWidth: '0 0 0 1px', maxHeight: 'calc(100dvh - 56px)' }}>
-        <SelectionPanel spec={spec} sel={sel} setSpec={setSpec} onSel={setSel} objMap={objMap}
-          proposals={proposals} acceptProposal={(i) => { patch({ compartments: [...spec.compartments, proposals[i]] }); setProposals(proposals.filter((_, j) => j !== i)); setSel(null) }} />
+        <SelectionPanel spec={spec} sel={sel} setSpec={setSpec} onSel={setSel} objMap={objMap}  />
 
         <section className="grid gap-2">
           <h3 className="sect">Export</h3>
@@ -328,9 +373,9 @@ function Checks({ job }: { job: NonNullable<ReturnType<typeof useQuery<import('.
   )
 }
 
-function SelectionPanel({ spec, sel, setSpec, onSel, objMap, proposals, acceptProposal }: {
+function SelectionPanel({ spec, sel, setSpec, onSel, objMap }: {
   spec: InsertSpec; sel: Sel; setSpec: (f: (s: InsertSpec) => InsertSpec) => void; onSel: (s: Sel) => void
-  objMap: Record<string, ObjectSpec>; proposals: Compartment[]; acceptProposal: (i: number) => void
+  objMap: Record<string, ObjectSpec>
 }) {
   if (!sel) return (
     <div className="grid gap-2">
@@ -349,11 +394,6 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, proposals, acceptPr
   }
   const del = <button className="btn btn-sm" onClick={remove}><Trash size={14} /> Entfernen</button>
 
-  if (sel.kind === 'proposal') {
-    return <div className="grid gap-2"><h3 className="sect">Fach-Vorschlag</h3>
-      <div className="num hint">{proposals[sel.index]?.w} x {proposals[sel.index]?.l} mm</div>
-      <button className="btn btn-sm btn-primary" onClick={() => acceptProposal(sel.index)}>Übernehmen</button></div>
-  }
   if (sel.kind === 'placement') {
     const p = spec.placements[sel.index]
     if (!p) return null

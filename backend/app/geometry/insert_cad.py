@@ -8,7 +8,7 @@ import cadquery as cq
 from ..schemas import InsertSpec, ObjectSpec
 from .checks import Checks, check_shape
 from .color_parts import split_color_parts
-from .cutters import cut_all, prism
+from .cutters import cut_all, grip_cutter, prism
 from .gridfinity import make_bin
 from .layout import Layout, compute_layout
 
@@ -39,10 +39,10 @@ def cutter_groups(lay: Layout) -> dict[str, list[cq.Shape]]:
     g: dict[str, list[cq.Shape]] = {"pocket": [], "grip": [], "compartment": []}
     for p in lay.pieces:
         g["pocket"] += prism(p.poly, p.z0, top)
-    for poly, z0 in lay.grips:
-        g["grip"] += prism(poly, z0, top)
-    for poly, z0, _ in lay.comps:
-        g["compartment"] += prism(poly, z0, top)
+    for gr in lay.grips:
+        g["grip"] += grip_cutter(gr, top)
+    for c in lay.comps:
+        g["compartment"] += prism(c.poly, c.z0, top)
     return g
 
 

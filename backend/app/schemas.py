@@ -47,6 +47,7 @@ class GripRecess(BaseModel):
     l: float = 0.0
     rot_deg: float = 0.0
     depth_below: float = 10.0
+    rounded: bool = True          # U-förmiger Boden (Finger gleitet unter das Werkzeug)
 
 
 class Compartment(BaseModel):
@@ -56,6 +57,7 @@ class Compartment(BaseModel):
     l: float
     radius: float = 3.0
     depth: float = 15.0
+    polygon: list[list[float]] | None = None   # freie Form (automatische Kästen); sonst Rechteck x,y,w,l
 
 
 class ColorSlots(BaseModel):
@@ -88,6 +90,16 @@ class InsertSpec(BaseModel):
     max_zones: int = 8
     floor_min: float = 1.5
     min_wall: float = 1.6
+    smooth_mm: float = 1.5             # Glättung der Taschenkontur (kleine Zacken/Kerben verschwinden)
+    auto_center: bool = True           # Inhalt mittig in der Einlage ausrichten
+    auto_grip: bool = True             # Greifmulde quer unter jedem Werkzeug erzeugen
+    grip_width: float = 16.0
+    grip_overhang: float = 15.0        # Mulde ragt je Seite so weit über die Tasche hinaus
+    grip_depth_below: float = 8.0
+    auto_compartments: bool = False    # freie Flächen mit Kästen füllen
+    comp_min_size: float = 20.0
+    comp_wall: float = 1.6
+    comp_depth: float | None = None    # None = so tief wie möglich
     placements: list[Placement] = []
     grip_recesses: list[GripRecess] = []
     compartments: list[Compartment] = []

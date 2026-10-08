@@ -33,8 +33,11 @@ def layout_payload(spec: InsertSpec) -> dict:
         "outer": [ox, oy],
         "pieces": [{"placement": p.placement, "zone": p.zone, "z0": p.z0, "depth": lay.z_surface - p.z0,
                     "polygons": _polys(p.poly)} for p in lay.pieces],
-        "grips": [{"z0": z, "depth": lay.z_surface - z, "polygons": _polys(g)} for g, z in lay.grips],
-        "compartments": [{"z0": z, "depth": lay.z_surface - z, "polygons": _polys(g)} for g, z, _ in lay.comps],
+        "grips": [{"z0": g.z0, "depth": lay.z_surface - g.z0, "polygons": _polys(g.poly), "auto": g.auto,
+                   "placement": g.placement, "rounded": g.rounded} for g in lay.grips],
+        "compartments": [{"z0": c.z0, "depth": lay.z_surface - c.z0, "polygons": _polys(c.poly), "auto": c.auto}
+                         for c in lay.comps],
+        "shift": list(lay.shift),
         "zones": [[{"a": z.a, "b": z.b, "floor": z.floor} for z in zs] for zs in lay.zones],
         "warnings": lay.warnings,
     }
@@ -85,12 +88,25 @@ def layout(iid: str, spec: InsertSpec | None = None) -> dict:
 
 @router.post("/{iid}/auto-compartments")
 def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
-    from ..geometry.auto_compartments import propose_compartments
+    """Vorschläge für Kästen in den freien Flächen (frei geformt, Wand folgt der Kontur)."""
+    from ..geometry.gridfinity import FOOT_H
+    from ..geometry.layout import auto_compartments
+    from ..schemas import Compartment
 
     spec = spec.model_copy(update={"id": iid}) if spec else get(iid)
     layout_payload(spec)
-    lay = compute_layout(spec, storage.objects_for(spec))
-    return {"compartments": [c.model_dump() for c in propose_compartments(lay, spec)]}
+    lay = compute_layout(spec.model_copy(update={"auto_compartments": False}), storage.objects_for(spec))
+    sx, sy = lay.shift
+    depth = spec.comp_depth or (lay.z_surface - FOOT_H - spec.floor_min)
+    out = []
+    for poly in auto_compartments(lay, spec):
+        # in Spec-Koordinaten (vor Zentrierung) zurückgeben, damit sie mit dem Inhalt mitwandern
+        from shapely import affinity
+        p = affinity.translate(poly, -sx, -sy)
+        x0, y0, x1, y1 = p.bounds
+        out.append(Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, depth=round(depth, 1),
+                               polygon=[list(map(lambda v: round(v, 2), c)) for c in p.exterior.coords]))
+    return {"compartments": [c.model_dump() for c in out]}
 
 
 @router.post("/{iid}/build")

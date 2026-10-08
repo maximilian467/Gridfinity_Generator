@@ -190,6 +190,10 @@ def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, 
     try:
         poly = contour.mask_to_polygon(mask, fill_holes)
         info["contour_px"] = (a4.mm_to_rect_px(np.asarray(poly.exterior.coords)) * VIEW_SCALE).round(1).tolist()
+        # wenige, gut ziehbare Punkte für den Punkte-Editor (Abweichung <= 0,4 mm)
+        edit = np.asarray(poly.simplify(0.4).exterior.coords)[:-1]
+        ph["edit_contour_px"] = (a4.mm_to_rect_px(edit) * VIEW_SCALE).round(1).tolist()
+        info["edit_contour_px"] = ph["edit_contour_px"]
         info["area_mm2"] = poly.area
         x0, y0, x1, y1 = segment.paper_rect_px(0.5)
         ys, xs = np.nonzero(mask)

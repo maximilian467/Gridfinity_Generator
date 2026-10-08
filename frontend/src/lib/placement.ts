@@ -16,30 +16,30 @@ export function pocketBounds(obj: ObjectSpec, rotDeg: number, spec: Pick<InsertS
   return { x0, y0, x1, y1 }
 }
 
-/** Ordnet alle Objekte untereinander an der linken unteren Innenecke an (Mindestwand dazwischen). */
+/** Ordnet alle Objekte nebeneinander an (Mindestwand dazwischen), unten bündig. */
 export function arrange(spec: InsertSpec, objects: Record<string, ObjectSpec>): Placement[] {
-  let y = MARGIN
+  let x = MARGIN
   return spec.placements.map((p) => {
     const o = objects[p.object_id]
     if (!o?.contour_mm.length) return p
     const b = pocketBounds(o, p.rot_deg, spec)
-    const np = { ...p, x: round(MARGIN - b.x0), y: round(y - b.y0) }
-    y += b.y1 - b.y0 + Math.max(spec.min_wall, 2)
+    const np = { ...p, x: round(x - b.x0), y: round(MARGIN - b.y0) }
+    x += b.x1 - b.x0 + Math.max(spec.min_wall, 2)
     return np
   })
 }
 
-/** Neues Objekt oberhalb der vorhandenen platzieren. */
+/** Neues Objekt senkrecht (Länge entlang y) rechts neben die vorhandenen setzen. */
 export function placeNew(spec: InsertSpec, objects: Record<string, ObjectSpec>, obj: ObjectSpec): Placement {
-  let top = MARGIN - Math.max(spec.min_wall, 2)
+  const gap = Math.max(spec.min_wall, 2)
+  let right = MARGIN - gap
   for (const p of spec.placements) {
     const o = objects[p.object_id]
     if (!o) continue
-    const b = pocketBounds(o, p.rot_deg, spec)
-    top = Math.max(top, p.y + b.y1)
+    right = Math.max(right, p.x + pocketBounds(o, p.rot_deg, spec).x1)
   }
-  const b = pocketBounds(obj, 0, spec)
-  return { object_id: obj.id, x: round(MARGIN - b.x0), y: round(top + Math.max(spec.min_wall, 2) - b.y0), rot_deg: 0, side_down: 'A' }
+  const b = pocketBounds(obj, 90, spec)
+  return { object_id: obj.id, x: round(right + gap - b.x0), y: round(MARGIN - b.y0), rot_deg: 90, side_down: 'A' }
 }
 
 const round = (v: number) => Math.round(v * 10) / 10

@@ -1,0 +1,89 @@
+"""Zielbild nach docs/samples/Spitzzange_Gridfinity_3x5_V2_mit_Kaesten.stl:
+Zange senkrecht, mittig, Langloch-Greifmulde quer am Gelenk mit rundem Boden, Kästen in den
+freien Flächen, deren Wand der Werkzeugkontur folgt."""
+import cadquery as cq
+import pytest
+from shapely.geometry import Polygon
+
+from app.geometry.insert_cad import build_insert
+from app.geometry.layout import compute_layout, pocket_outline
+from app.geometry.samples import synthetic_pliers
+from app.schemas import InsertSpec, Placement
+
+
+@pytest.fixture(scope="module")
+def ref():
+    o = synthetic_pliers()
+    spec = InsertSpec(grid_x=3, grid_y=5, placements=[Placement(object_id="pliers", x=0, y=0, rot_deg=90)],
+                      auto_compartments=True)
+    return spec, o, build_insert(spec, {"pliers": o})
+
+
+def test_centered(ref):
+    _, _, r = ref
+    lay = r.layout
+    x0, y0, x1, y1 = lay.pocket_union().union(lay.grips[0].poly).bounds
+    ix0, iy0, ix1, iy1 = lay.inner.bounds
+    assert (x0 - ix0) == pytest.approx(ix1 - x1, abs=0.5)
+    assert (y0 - iy0) == pytest.approx(iy1 - y1, abs=0.5)
+
+
+def test_auto_grip_rounded_and_below_tool(ref):
+    _, _, r = ref
+    g = next(g for g in r.layout.grips if g.auto)
+    assert g.rounded
+    deepest_pocket = min(p.z0 for p in r.layout.pieces if p.poly.intersects(g.poly))
+    assert g.z0 < deepest_pocket - 5                     # Finger kommt unter das Werkzeug
+    solid = r.body.val()
+    (ax, ay), (bx, by) = list(g.axis.coords)
+    cx, cy = (ax + bx) / 2, (ay + by) / 2
+    ux, uy = (bx - ax), (by - ay)
+    n = (ux ** 2 + uy ** 2) ** 0.5
+    nx, ny = -uy / n, ux / n
+    # Mitte des Bodens: Luft knapp über dem tiefsten Punkt
+    assert not solid.isInside(cq.Vector(cx, cy, g.z0 + 0.4))
+    # quer zur Mitte am Rand der Mulde, gleiche Höhe: Material (U-Profil statt flacher Boden)
+    assert solid.isInside(cq.Vector(cx + nx * g.radius * 0.9, cy + ny * g.radius * 0.9, g.z0 + 0.4))
+
+
+def test_compartments_follow_contour(ref):
+    spec, _, r = ref
+    comps = [c for c in r.layout.comps if c.auto]
+    assert len(comps) >= 2
+    pockets = r.layout.pocket_union()
+    grips = r.layout.grips[0].poly
+    for c in comps:
+        assert r.layout.inner.contains(c.poly)
+        assert c.poly.distance(pockets) >= spec.comp_wall - 0.05
+        assert c.poly.distance(grips) >= spec.comp_wall - 0.05
+        b = c.poly.bounds
+        assert b[2] - b[0] >= spec.comp_min_size and b[3] - b[1] >= spec.comp_min_size
+    # mindestens ein Kasten ist kein Rechteck (Wand folgt der Tasche)
+    assert any(c.poly.area < 0.97 * Polygon.from_bounds(*c.poly.bounds).area for c in comps)
+    assert not [w for w in r.warnings if "überlappen" in w or "Wand zwischen" in w or "Innenbereich" in w]
+
+
+def test_reference_body_valid(ref):
+    _, _, r = ref
+    assert r.checks.valid and r.checks.solid_count == 1 and r.checks.watertight
+    assert r.volume_sum_ok
+    assert [p.name for p in r.parts] == ["Körper", "Greifmulden", "Taschen", "Fächer"]
+
+
+def test_smoothing_never_shrinks():
+    notch = [[0, 0], [100, 0], [100, 20], [52, 20], [51, 18.5], [50, 20], [0, 20]]   # 1,5 mm Kerbe
+    raw = Polygon(notch)
+    o0 = pocket_outline(notch, 1.0, 0.0, 0.0)
+    o1 = pocket_outline(notch, 1.0, 0.0, 1.5)
+    assert o1.buffer(0.06).contains(raw.buffer(1.0, join_style=1))
+    assert len(o1.exterior.coords) < len(o0.exterior.coords)
+    assert o1.area >= o0.area
+
+
+def test_center_off_keeps_positions():
+    o = synthetic_pliers()
+    spec = InsertSpec(grid_x=5, grid_y=3, auto_center=False, auto_grip=False,
+                      placements=[Placement(object_id="pliers", x=10, y=40)])
+    lay = compute_layout(spec, {"pliers": o})
+    assert lay.shift == (0.0, 0.0)
+    assert lay.pocket_union().bounds[0] == pytest.approx(10 - 2.5, abs=0.3)

@@ -17,6 +17,7 @@ export interface PhotoMeta {
   mask_url?: string
   overlay_url?: string
   hand_url?: string
+  edit_contour_px?: [number, number][]
   cut_point_mm?: [number, number]
   fill_holes?: boolean
 }
@@ -40,8 +41,8 @@ export interface ObjectSpec {
 }
 
 export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
-export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number }
-export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number }
+export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean }
+export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number; polygon?: [number, number][] | null }
 
 export interface InsertSpec {
   id: string
@@ -60,6 +61,16 @@ export interface InsertSpec {
   max_zones: number
   floor_min: number
   min_wall: number
+  smooth_mm: number
+  auto_center: boolean
+  auto_grip: boolean
+  grip_width: number
+  grip_overhang: number
+  grip_depth_below: number
+  auto_compartments: boolean
+  comp_min_size: number
+  comp_wall: number
+  comp_depth: number | null
   placements: Placement[]
   grip_recesses: GripRecess[]
   compartments: Compartment[]
@@ -71,8 +82,9 @@ export interface PolyOut { exterior: [number, number][]; holes: [number, number]
 export interface LayoutOut {
   grid_x: number; grid_y: number; height_u: number; z_surface: number; outer: [number, number]
   pieces: { placement: number; zone: number; z0: number; depth: number; polygons: PolyOut[] }[]
-  grips: { z0: number; depth: number; polygons: PolyOut[] }[]
-  compartments: { z0: number; depth: number; polygons: PolyOut[] }[]
+  grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean }[]
+  compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean }[]
+  shift: [number, number]
   zones: { a: number; b: number; floor: number }[][]
   warnings: string[]
 }

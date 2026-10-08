@@ -44,13 +44,15 @@ def test_pliers_zones():
 # ---- Layout -------------------------------------------------------------
 def test_auto_grid_and_height():
     o = synthetic_pliers()
-    spec = InsertSpec(placements=[Placement(object_id="pliers", x=6, y=30)])
+    spec = InsertSpec(placements=[Placement(object_id="pliers", x=6, y=30)], auto_grip=False)
     lay = compute_layout(spec, {"pliers": o})
     assert lay.grid_x == 5 and lay.grid_y == 2
+    # mit automatischer Greifmulde (ragt je 15 mm über die Tasche) wird die Einlage breiter
+    assert compute_layout(spec.model_copy(update={"auto_grip": True}), {"pliers": o}).grid_y == 3
     assert not lay.warnings
     assert min(p.z0 for p in lay.pieces) >= 4.75 + 1.5 - 1e-6
     spec2 = InsertSpec(grid_x=lay.grid_x, grid_y=lay.grid_y, height_u=lay.height_u - 1,
-                       placements=spec.placements)
+                       placements=spec.placements, auto_grip=False)
     lay2 = compute_layout(spec2, {"pliers": o})
     assert any("höher" in w for w in lay2.warnings)
 
@@ -59,7 +61,7 @@ def test_auto_grid_and_height():
 @pytest.fixture(scope="module")
 def pliers_result():
     o = synthetic_pliers()
-    spec = InsertSpec(grid_x=5, grid_y=2, placements=[Placement(object_id="pliers", x=12, y=42)],
+    spec = InsertSpec(grid_x=5, grid_y=3, placements=[Placement(object_id="pliers", x=12, y=42)],
                       grip_recesses=[GripRecess(shape="stadium", x=60, y=42, w=14, l=40, rot_deg=90)],
                       compartments=[Compartment(x=180, y=55, w=20, l=20, depth=12)])
     return spec, o, build_insert(spec, {"pliers": o})
@@ -88,7 +90,7 @@ def test_pocket_floor_matches_layout(pliers_result):
     solid = r.body.val()
     for p in r.layout.pieces:
         pt = p.poly.representative_point()
-        if any(g.contains(pt) for g, _ in r.layout.grips):
+        if any(g.poly.contains(pt) for g in r.layout.grips):
             continue
         assert not solid.isInside(cq.Vector(pt.x, pt.y, p.z0 + 0.3))
         assert solid.isInside(cq.Vector(pt.x, pt.y, p.z0 - 0.3))
@@ -96,7 +98,7 @@ def test_pocket_floor_matches_layout(pliers_result):
 
 def test_lform_not_mirrored():
     o = l_shape()
-    spec = InsertSpec(grid_x=2, grid_y=2, height_u=3,
+    spec = InsertSpec(grid_x=2, grid_y=2, height_u=3, auto_center=False, auto_grip=False,
                       placements=[Placement(object_id="lform", x=10, y=20, rot_deg=0)])
     r = build_insert(spec, {"lform": o})
     solid = r.body.val()

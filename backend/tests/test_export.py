@@ -19,7 +19,7 @@ from app.schemas import GripRecess, InsertSpec, Placement
 @pytest.fixture(scope="module")
 def res():
     o = synthetic_pliers()
-    spec = InsertSpec(grid_x=5, grid_y=2, placements=[Placement(object_id="pliers", x=12, y=42)],
+    spec = InsertSpec(grid_x=5, grid_y=3, placements=[Placement(object_id="pliers", x=12, y=42)],
                       grip_recesses=[GripRecess(x=60, y=42, w=14, l=40, rot_deg=90)])
     return build_insert(spec, {"pliers": o})
 

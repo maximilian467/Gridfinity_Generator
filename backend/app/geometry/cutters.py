@@ -42,3 +42,26 @@ def fuse_all(shapes: list[cq.Shape]) -> cq.Workplane | None:
 def cut_all(body: cq.Workplane, shapes: list[cq.Shape]) -> cq.Workplane:
     u = fuse_all(shapes)
     return body if u is None else body.cut(u)
+
+
+def grip_cutter(g, top: float) -> list[cq.Shape]:
+    """Greifmulde: Prisma bis oben; bei gerundeter Mulde ist der Boden ein liegender Zylinder
+    entlang der Mittellinie, auf die Stadionform beschnitten -> U-Profil quer, runde Enden.
+    (Keine Kugeln: deren Pole erzeugen nicht wasserdichte Netze und langsame Booleans.)"""
+    from shapely.geometry import Point as _Pt
+
+    if not g.rounded or isinstance(g.axis, _Pt):
+        return prism(g.poly, g.z0, top)
+    r = g.radius
+    zc = g.z0 + r
+    (ax, ay), (bx, by) = list(g.axis.coords)
+    L = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+    if L < 1e-6:
+        return prism(g.poly, g.z0, top)
+    ux, uy = (bx - ax) / L, (by - ay) / L
+    cyl = cq.Solid.makeCylinder(r, L + 2 * r, cq.Vector(ax - ux * r, ay - uy * r, zc), cq.Vector(ux, uy, 0))
+    clip = fuse_all(prism(g.poly, g.z0 - 1, zc + 0.01))
+    shapes = prism(g.poly, zc, top)
+    if clip is not None:
+        shapes.append(cyl.intersect(clip.val()))
+    return shapes

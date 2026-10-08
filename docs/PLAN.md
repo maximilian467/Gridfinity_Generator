@@ -202,6 +202,13 @@ Eingabe: `bottom(s)` (Ruhelage), Taschenausdehnung in s von `−(clearance_xy+cl
 5. Alle Cutter mit 2D-Prüfung vorab (shapely): innerhalb Innenbereich (Außenmaß − 2·2.6 mm), Abstände ≥ `min_wall` → sonst Warnung (Build trotzdem möglich).
 6. `body = base − union(alle Cutter)`.
 
+### G2. Erweiterungen nach Nutzer-Feedback (Referenz: `docs/samples/Spitzzange_Gridfinity_3x5_V2_mit_Kaesten.stl`)
+- **Konturglättung** `smooth_mm` (Default 1,5): morphologisches Schließen vor dem Spiel-Offset; die Tasche wird nie kleiner als das Werkzeug.
+- **Automatisch mittig** `auto_center` (Default an): Taschen + Mulden + manuelle Fächer werden im Innenbereich zentriert; Auto-Raster nach Größe. Manuelles Ziehen schaltet es aus (Positionen werden übernommen). Neue Werkzeuge liegen senkrecht (rot 90°).
+- **Greifmulde automatisch** `auto_grip`: Langloch quer zum Werkzeug am Schwerpunkt (Breite × Dicke gewichtet, landet bei Zangen am Gelenk), Länge = Taschenbreite + 2 × `grip_overhang`, Boden `grip_depth_below` unter der tiefsten berührten Zone. **Gerundeter Boden** (U-Profil): liegender Zylinder entlang der Mittellinie, auf die Stadionform beschnitten. Keine Kugeln (Kugelpole ergaben nicht wasserdichte Netze und hängende Booleans).
+- **Kästen automatisch** `auto_compartments`: größte freie Rechtecke (≥ `comp_min_size`) im Innenbereich minus (Taschen ∪ Mulden ∪ Fächer) ⊕ Wand, auf bis zu 8 mm an die Hindernisse herangewachsen, so dass die Kastenwand der Werkzeugkontur folgt; Ecken r = 3 mm; Tiefe `comp_depth` oder maximal.
+- **Umriss-Editor**: Kontur als ziehbare Punkte (Vereinfachung 0,4 mm), Punkt einfügen per Klick auf die Linie, löschen per Rechtsklick.
+
 ### H. Farbteile (`geometry/color_parts.py`)
 Für jede Farbgruppe g in Priorität **Greifmulde > Tasche > Fach**:
 - „gewachsener“ Cutter: gleiche Polygone, XY um `color_skin.wall` gepuffert, Böden um `color_skin.floor` abgesenkt, oben bis `z_surface + 5` (bei `show_top_ring=false` nur bis `z_surface − 0.6`).

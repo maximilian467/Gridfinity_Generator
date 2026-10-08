@@ -1,6 +1,7 @@
 export interface SegmentResult {
   mask_url: string; overlay_url: string; contour_px: number[][]; area_mm2?: number
   touches_paper_edge?: boolean; sam_used?: boolean; hand_removed?: boolean; hand_frac?: number; hand_url?: string | null
+  edit_contour_px?: [number, number][]
 }
 
 import type { BaseplateSpec, InsertSpec, Job, LayoutOut, ObjectSpec, PhotoMeta } from './types'
@@ -36,7 +37,7 @@ export const api = {
       `/objects/${id}/photos/${view}/segment`, json('POST', body)),
   uploadMask: (id: string, view: string, blob: Blob, fill_holes: boolean) => {
     const fd = new FormData(); fd.append('file', blob, 'mask.png')
-    return req<{ mask_url: string; overlay_url: string }>(`/objects/${id}/photos/${view}/mask?fill_holes=${fill_holes}`,
+    return req<SegmentResult>(`/objects/${id}/photos/${view}/mask?fill_holes=${fill_holes}`,
       { method: 'PUT', body: fd })
   },
   profile: (id: string, body: Record<string, unknown>) => req<ObjectSpec>(`/objects/${id}/profile`, json('POST', body)),

@@ -16,10 +16,10 @@ def _grown(lay: Layout, spec: InsertSpec) -> dict[str, list[cq.Shape]]:
     out: dict[str, list[cq.Shape]] = {"grip": [], "pocket": [], "compartment": []}
     for p in lay.pieces:
         out["pocket"] += prism(p.poly.buffer(sk.wall, join_style=1), p.z0 - sk.floor, top)
-    for poly, z0 in lay.grips:
-        out["grip"] += prism(poly.buffer(sk.wall, join_style=1), z0 - sk.floor, top)
-    for poly, z0, _ in lay.comps:
-        out["compartment"] += prism(poly.buffer(sk.wall, join_style=1), z0 - sk.floor, top)
+    for g in lay.grips:
+        out["grip"] += prism(g.poly.buffer(sk.wall, join_style=1), g.z0 - sk.floor, top)
+    for c in lay.comps:
+        out["compartment"] += prism(c.poly.buffer(sk.wall, join_style=1), c.z0 - sk.floor, top)
     return out
 
 
