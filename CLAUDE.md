@@ -13,6 +13,5 @@ Verbindlicher Plan: `docs/PLAN.md`. Phase für Phase arbeiten; nach jeder Phase 
 
 ## Befehle
 - Backend-Tests: `cd backend; uv run pytest`
-- Dev: `scripts/dev.ps1` (uvicorn :8000 + vite :5173, Proxy /api)
+- Dev: `scripts/dev.ps1` (wählt freie Ports ab 8003/5183 selbst; Proxy /api)
 - Frontend-Build: `cd frontend; npm run build` (FastAPI liefert `frontend/dist` aus)
-- Ports 8000/5173 sind lokal evtl. von anderen Projekten belegt: `scripts/dev.ps1 -ApiPort 8010 -WebPort 5180`.

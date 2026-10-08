@@ -89,15 +89,29 @@ export function Msgs({ items, kind = 'warn' }: { items?: string[]; kind?: 'warn'
   )
 }
 
-export function Silhouette({ contour, className = '' }: { contour: [number, number][]; className?: string }) {
+export function Silhouette({ contour, className = '', dims = true }: { contour: [number, number][]; className?: string; dims?: boolean }) {
   if (!contour.length) return <div className={`skeleton ${className}`} />
   const xs = contour.map((p) => p[0]); const ys = contour.map((p) => p[1])
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys)
-  const pad = 4
+  const w = x1 - x0, h = y1 - y0
+  const pad = Math.max(w, h) * 0.12
   const pts = contour.map(([x, y]) => `${(x - x0).toFixed(1)},${(y1 - y).toFixed(1)}`).join(' ')
+  const t = Math.max(w, h) * 0.035            // Strichstärke / Pfeilgröße in mm
+  const dy = h + pad * 0.6
   return (
-    <svg className={className} viewBox={`${-pad} ${-pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`} role="img" aria-label="Umriss">
-      <polygon points={pts} fill="var(--accent-soft)" stroke="var(--accent)" strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
+    <svg className={`${className} drafting`} viewBox={`${-pad} ${-pad} ${w + 2 * pad} ${dy + t * 4.8 + pad}`} role="img" aria-label="Umriss mit Bemaßung"
+      style={{ borderRadius: 4 }}>
+      <polygon points={pts} fill="var(--accent-soft)" stroke="var(--accent)" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />
+      {dims && (
+        <g stroke="var(--ink-2)" strokeWidth={1} vectorEffect="non-scaling-stroke" fill="var(--ink-2)">
+          <line x1={0} y1={dy} x2={w} y2={dy} vectorEffect="non-scaling-stroke" />
+          <line x1={0} y1={h + 1} x2={0} y2={dy + t} vectorEffect="non-scaling-stroke" />
+          <line x1={w} y1={h + 1} x2={w} y2={dy + t} vectorEffect="non-scaling-stroke" />
+          <polygon points={`0,${dy} ${t * 1.6},${dy - t * 0.6} ${t * 1.6},${dy + t * 0.6}`} stroke="none" />
+          <polygon points={`${w},${dy} ${w - t * 1.6},${dy - t * 0.6} ${w - t * 1.6},${dy + t * 0.6}`} stroke="none" />
+          <text x={w / 2} y={dy + t * 3.4} fontSize={t * 3.2} textAnchor="middle" stroke="none" className="num">{w.toFixed(0)}</text>
+        </g>
+      )}
     </svg>
   )
 }

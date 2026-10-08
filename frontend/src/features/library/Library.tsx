@@ -28,7 +28,7 @@ export function Library() {
     <div className="max-w-[1200px] mx-auto px-4 py-6 grid gap-10">
       <section className="grid gap-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h1 className="text-xl font-semibold">Gescannte Objekte</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Gescannte Objekte</h1>
           <div className="flex gap-2">
             <button className="btn" onClick={() => demo.mutate()} disabled={demo.isPending}>Demo-Zange anlegen</button>
             <button className="btn btn-primary" onClick={() => scan.mutate()} disabled={scan.isPending}>
@@ -48,7 +48,7 @@ export function Library() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {objects.data.map((o) => (
               <article key={o.id} className="panel p-3 grid gap-2">
-                <Silhouette contour={o.contour_mm} className="w-full h-24" />
+                <Silhouette contour={o.contour_mm} className="w-full h-32" />
                 <div className="font-medium truncate">{o.name}</div>
                 <div className="num text-xs" style={{ color: 'var(--ink-2)' }}>
                   {o.profile ? `${o.length_mm.toFixed(1)} x ${o.width_mm.toFixed(1)} mm` : 'noch nicht fertig gescannt'}
@@ -66,7 +66,7 @@ export function Library() {
 
       <section className="grid gap-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h1 className="text-xl font-semibold">Einlagen</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Einlagen</h1>
           <button className="btn btn-primary" onClick={() => newInsert.mutate()} disabled={newInsert.isPending}>
             <Plus size={16} /> Neue Einlage
           </button>

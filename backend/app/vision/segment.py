@@ -10,11 +10,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..config import DATA_DIR
+from ..config import ROOT
 from .a4 import A4_H, A4_W, MARGIN_MM, PX_PER_MM, RECT_H, RECT_W
 from .refine import refine_mask
 
-SAM_WEIGHTS = DATA_DIR / "models" / "sam2.1_b.pt"
+SAM_WEIGHTS = ROOT / "data" / "models" / "sam2.1_b.pt"
 NEG_RADIUS_MM = 5.0
 
 
@@ -59,10 +59,20 @@ def sam_available() -> bool:
     return SAM_WEIGHTS.exists()
 
 
-def sam_mask(rect_bgr: np.ndarray, pos, neg, box=None) -> np.ndarray:
-    from ultralytics import SAM
+_sam_model = None
 
-    model = SAM(str(SAM_WEIGHTS))
+
+def _get_sam():
+    global _sam_model
+    if _sam_model is None:
+        from ultralytics import SAM
+
+        _sam_model = SAM(str(SAM_WEIGHTS))
+    return _sam_model
+
+
+def sam_mask(rect_bgr: np.ndarray, pos, neg, box=None) -> np.ndarray:
+    model = _get_sam()
     pts = [list(map(float, p)) for p in list(pos) + list(neg)]
     lbl = [1] * len(pos) + [0] * len(neg)
     kw = {"points": pts, "labels": lbl} if pts else {}

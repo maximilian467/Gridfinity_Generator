@@ -96,10 +96,10 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   return (
     <div className="grid gap-0 lg:grid-cols-[300px_minmax(0,1fr)_320px] min-h-[calc(100dvh-56px)]">
       {/* Parameter */}
-      <aside className="panel p-3 grid gap-3 content-start overflow-y-auto" style={{ borderRadius: 0, borderWidth: '0 1px 0 0', maxHeight: 'calc(100dvh - 56px)' }}>
+      <aside className="panel p-3 grid gap-3 content-start overflow-y-auto overflow-x-hidden" style={{ borderRadius: 0, borderWidth: '0 1px 0 0', maxHeight: 'calc(100dvh - 56px)' }}>
         <Field label="Name"><input className="input" value={spec.name} onChange={(e) => patch({ name: e.target.value })} /></Field>
         <section className="grid gap-2">
-          <h3 className="text-sm font-semibold">Größe</h3>
+          <h3 className="sect">Größe</h3>
           <Check label="Raster automatisch" checked={spec.grid_x === null}
             onChange={(v) => patch(v ? { grid_x: null, grid_y: null } : { grid_x: lay?.grid_x ?? 3, grid_y: lay?.grid_y ?? 3 })} />
           {spec.grid_x !== null && (
@@ -117,7 +117,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         </section>
 
         <section className="grid gap-2">
-          <h3 className="text-sm font-semibold">Spiel</h3>
+          <h3 className="sect">Spiel</h3>
           <Segmented value={[0.3, 1.0, 2.0].includes(spec.clearance_xy) ? spec.clearance_xy : -1}
             onChange={(v) => v > 0 && patch({ clearance_xy: v })}
             options={[{ value: 0.3, label: 'Presspassung' }, { value: 1.0, label: 'Normal' }, { value: 2.0, label: 'Locker' }, { value: -1, label: 'Frei' }]} />
@@ -129,7 +129,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         </section>
 
         <details className="grid gap-2">
-          <summary className="text-sm font-semibold cursor-pointer">Stufen und Wände</summary>
+          <summary className="sect cursor-pointer">Stufen und Wände</summary>
           <div className="grid gap-2 mt-2">
             <NumberField label="Stufentoleranz" value={spec.step_tol} step={0.1} min={0.1} onChange={(v) => patch({ step_tol: v })} />
             <NumberField label="Min. Zonenlänge" value={spec.min_zone_len} step={1} min={1} onChange={(v) => patch({ min_zone_len: v })} />
@@ -140,7 +140,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         </details>
 
         <section className="grid gap-2">
-          <h3 className="text-sm font-semibold">Farben (Filament-Slot)</h3>
+          <h3 className="sect">Farben (Filament-Slot)</h3>
           {([['body', 'Körper'], ['pocket', 'Taschen'], ['grip', 'Greifmulden'], ['compartment', 'Fächer']] as const).map(([key, label]) => (
             <div key={key} className="flex items-center justify-between gap-2">
               <span>{label}</span>
@@ -159,7 +159,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
       </aside>
 
       {/* Mitte */}
-      <section className="min-w-0 p-3 grid gap-3 content-start">
+      <section className="min-w-0 p-3 grid grid-cols-[minmax(0,1fr)] gap-3 content-start">
         <div className="flex flex-wrap items-center gap-2">
           <Segmented value={tab} onChange={setTab} options={[{ value: 'layout', label: 'Layout' }, { value: '3d', label: '3D-Vorschau' }]} />
           <div className="flex-1" />
@@ -221,7 +221,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
           proposals={proposals} acceptProposal={(i) => { patch({ compartments: [...spec.compartments, proposals[i]] }); setProposals(proposals.filter((_, j) => j !== i)); setSel(null) }} />
 
         <section className="grid gap-2">
-          <h3 className="text-sm font-semibold">Export</h3>
+          <h3 className="sect">Export</h3>
           <button className="btn btn-primary justify-center" disabled={build.isPending || job.data?.status === 'running' || !spec.placements.length}
             onClick={() => build.mutate()}>
             <ArrowClockwise size={16} /> {job.data?.status === 'running' ? 'Erzeuge …' : '3D erzeugen und exportieren'}
@@ -286,7 +286,7 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, proposals, acceptPr
   const del = <button className="btn btn-sm" onClick={remove}><Trash size={14} /> Entfernen</button>
 
   if (sel.kind === 'proposal') {
-    return <div className="grid gap-2"><h3 className="text-sm font-semibold">Fach-Vorschlag</h3>
+    return <div className="grid gap-2"><h3 className="sect">Fach-Vorschlag</h3>
       <div className="num hint">{proposals[sel.index]?.w} x {proposals[sel.index]?.l} mm</div>
       <button className="btn btn-sm btn-primary" onClick={() => acceptProposal(sel.index)}>Übernehmen</button></div>
   }
@@ -296,7 +296,7 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, proposals, acceptPr
     const upd = (q: Partial<typeof p>) => setSpec((s) => ({ ...s, placements: s.placements.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
     return (
       <div className="grid gap-2">
-        <h3 className="text-sm font-semibold">{objMap[p.object_id]?.name ?? 'Objekt'}</h3>
+        <h3 className="sect">{objMap[p.object_id]?.name ?? 'Objekt'}</h3>
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="X" value={p.x} step={0.5} onChange={(v) => upd({ x: v })} />
           <NumberField label="Y" value={p.y} step={0.5} onChange={(v) => upd({ y: v })} />
@@ -316,7 +316,7 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, proposals, acceptPr
     const upd = (q: Partial<GripRecess>) => setSpec((s) => ({ ...s, grip_recesses: s.grip_recesses.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
     return (
       <div className="grid gap-2">
-        <h3 className="text-sm font-semibold">Greifmulde</h3>
+        <h3 className="sect">Greifmulde</h3>
         <Segmented value={g.shape} onChange={(v) => upd({ shape: v })} options={[{ value: 'stadium', label: 'Oval' }, { value: 'rect', label: 'Rechteck' }, { value: 'circle', label: 'Kreis' }]} />
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="X (Mitte)" value={g.x} step={0.5} onChange={(v) => upd({ x: v })} />
@@ -335,7 +335,7 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, proposals, acceptPr
   const upd = (q: Partial<Compartment>) => setSpec((s) => ({ ...s, compartments: s.compartments.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
   return (
     <div className="grid gap-2">
-      <h3 className="text-sm font-semibold">Fach</h3>
+      <h3 className="sect">Fach</h3>
       <div className="grid grid-cols-2 gap-2">
         <NumberField label="X (links)" value={c.x} step={0.5} onChange={(v) => upd({ x: v })} />
         <NumberField label="Y (unten)" value={c.y} step={0.5} onChange={(v) => upd({ y: v })} />

@@ -110,3 +110,18 @@ def test_lform_through_pipeline_not_mirrored():
                 best_m = max(best_m, iou)
     assert best > 0.97
     assert best_m < best - 0.05
+
+
+def test_sam_path_matches_truth():
+    from app.vision.segment import sam_available, sam_mask
+    if not sam_available():
+        pytest.skip("SAM-Gewichte fehlen (scripts/download_models.ps1)")
+    from shapely.geometry import Polygon
+    from app.vision.a4 import mm_to_rect_px
+    poly = rot_rect(140, 110, 150, 38, 25)
+    img = render(poly, 2.0, camera(), seed=1)
+    rect = rectify(img, find_a4_corners(img))
+    m = sam_mask(rect, [list(mm_to_rect_px([140, 110]))], [])
+    got = mask_to_polygon(m)
+    truth = Polygon(poly)
+    assert got.symmetric_difference(truth).area / truth.length < 0.6

@@ -7,3 +7,4 @@ dist/
 __pycache__/
 .pytest_cache/
 .claude/settings.local.json
+docs/samples/candidates/

@@ -5,9 +5,10 @@ Tasche mit Spiel, gestufter Boden, Greifmulden, Fächer, Farbteile. Export als 3
 
 ## Starten
 ```powershell
-scripts/start.ps1                      # baut das Frontend, alles auf http://localhost:8000
-scripts/dev.ps1 -ApiPort 8010 -WebPort 5180   # Entwicklung mit Hot-Reload (Ports anpassen, falls belegt)
+scripts/start.ps1                      # baut das Frontend, alles auf einem freien Port (ab 8003, wird ausgegeben)
+scripts/dev.ps1                        # Entwicklung mit Hot-Reload, freie Ports automatisch (oder -ApiPort/-WebPort)
 ```
+SAM-Segmentierung (optional, bessere Masken): `scripts/download_models.ps1` lädt die Gewichte (160 MB) nach `data/models/`; ohne sie läuft die klassische Segmentierung.
 Tests: `cd backend; uv run pytest`
 
 ## Ablauf
