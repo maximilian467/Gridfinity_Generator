@@ -1,9 +1,14 @@
 """Pydantic-Schemas (Spiegel: frontend/src/lib/types.ts). Alle Maße in mm."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
+
+Coord = Annotated[float, Field(ge=-2000, le=2000)]
+Angle = Annotated[float, Field(ge=-3600, le=3600)]
+Slot = Annotated[int, Field(ge=1, le=16)]
+Point2 = Annotated[list[float], Field(min_length=2, max_length=2)]
 
 
 class Profile(BaseModel):
@@ -32,87 +37,87 @@ class ObjectSpec(BaseModel):
 
 
 class Placement(BaseModel):
-    object_id: str
-    x: float = 0.0
-    y: float = 0.0
-    rot_deg: float = 0.0
+    object_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    x: Coord = 0.0
+    y: Coord = 0.0
+    rot_deg: Angle = 0.0
     side_down: Literal["A", "B"] = "A"
 
 
 class GripRecess(BaseModel):
     shape: Literal["stadium", "rect", "circle"] = "stadium"
-    x: float
-    y: float
-    w: float
-    l: float = 0.0
-    rot_deg: float = 0.0
-    depth_below: float = 10.0
+    x: Coord
+    y: Coord
+    w: float = Field(ge=2, le=200)
+    l: float = Field(0.0, ge=0, le=500)
+    rot_deg: Angle = 0.0
+    depth_below: float = Field(10.0, ge=0, le=100)
     rounded: bool = True          # U-förmiger Boden (Finger gleitet unter das Werkzeug)
 
 
 class Compartment(BaseModel):
-    x: float
-    y: float
-    w: float
-    l: float
-    radius: float = 3.0
-    depth: float = 15.0
-    polygon: list[list[float]] | None = None   # freie Form (automatische Kästen); sonst Rechteck x,y,w,l
+    x: Coord
+    y: Coord
+    w: float = Field(ge=1, le=600)
+    l: float = Field(ge=1, le=600)
+    radius: float = Field(3.0, ge=0, le=50)
+    depth: float = Field(15.0, ge=0.5, le=200)
+    polygon: Annotated[list[Point2], Field(max_length=4000)] | None = None   # freie Form (automatische Kästen); sonst Rechteck x,y,w,l
     generated: bool = False                    # von 'Kästen erzeugen' angelegt (wird beim Neu-Erzeugen ersetzt)
 
 
 class ColorSlots(BaseModel):
-    body: int = 1
-    pocket: int = 2
-    grip: int = 3
-    compartment: int = 2
+    body: Slot = 1
+    pocket: Slot = 2
+    grip: Slot = 3
+    compartment: Slot = 2
 
 
 class ColorSkin(BaseModel):
-    floor: float = 0.6
-    wall: float = 0.8
+    floor: float = Field(0.6, ge=0.2, le=5)
+    wall: float = Field(0.8, ge=0.2, le=5)
     show_top_ring: bool = True
 
 
 class InsertSpec(BaseModel):
-    id: str = ""
-    name: str = "Einlage"
-    grid_x: int | None = None
-    grid_y: int | None = None
-    height_u: int | None = None
+    id: str = Field("", max_length=40)
+    name: str = Field("Einlage", max_length=120)
+    grid_x: int | None = Field(None, ge=1, le=12)
+    grid_y: int | None = Field(None, ge=1, le=12)
+    height_u: int | None = Field(None, ge=1, le=30)
     stacking_lip: bool = True
     magnets: bool = False
-    clearance_xy: float = 1.5
-    clearance_end: float = 1.0
-    clearance_z: float = 0.4
-    overhang: float = 0.0
-    step_tol: float = 1.0
-    min_zone_len: float = 8.0
-    max_zones: int = 8
-    floor_min: float = 1.5
-    min_wall: float = 1.6
-    smooth_mm: float = 1.5             # Glättung der Taschenkontur (kleine Zacken/Kerben verschwinden)
+    clearance_xy: float = Field(1.5, ge=0, le=10)
+    clearance_end: float = Field(1.0, ge=0, le=20)
+    clearance_z: float = Field(0.4, ge=0, le=10)
+    overhang: float = Field(0.0, ge=-50, le=50)
+    step_tol: float = Field(1.0, ge=0.1, le=50)
+    min_zone_len: float = Field(8.0, ge=0.5, le=200)
+    max_zones: int = Field(8, ge=1, le=40)
+    floor_min: float = Field(1.5, ge=0.4, le=20)
+    min_wall: float = Field(1.6, ge=0.4, le=20)
+    smooth_mm: float = Field(1.5, ge=0, le=10)             # Glättung der Taschenkontur (kleine Zacken/Kerben verschwinden)
     auto_center: bool = True           # Inhalt mittig in der Einlage ausrichten
     auto_grip: bool = True             # Greifmulde quer unter jedem Werkzeug erzeugen
-    grip_width: float = 16.0
-    grip_overhang: float = 15.0        # Mulde ragt je Seite so weit über die Tasche hinaus
-    grip_depth_below: float = 8.0
+    grip_width: float = Field(16.0, ge=4, le=80)
+    grip_overhang: float = Field(15.0, ge=0, le=100)        # Mulde ragt je Seite so weit über die Tasche hinaus
+    grip_depth_below: float = Field(8.0, ge=0, le=100)
     auto_compartments: bool = False    # freie Flächen mit Kästen füllen
-    comp_min_size: float = 20.0
-    comp_wall: float = 1.6
-    comp_depth: float | None = None    # None = so tief wie möglich
-    placements: list[Placement] = []
-    grip_recesses: list[GripRecess] = []
-    compartments: list[Compartment] = []
+    comp_min_size: float = Field(20.0, ge=5, le=300)
+    comp_wall: float = Field(1.6, ge=0.4, le=20)
+    comp_depth: float | None = Field(None, ge=0, le=200)    # None = so tief wie möglich
+    placements: Annotated[list[Placement], Field(max_length=12)] = []
+    grip_recesses: Annotated[list[GripRecess], Field(max_length=40)] = []
+    compartments: Annotated[list[Compartment], Field(max_length=60)] = []
     colors: ColorSlots = Field(default_factory=ColorSlots)
     color_skin: ColorSkin = Field(default_factory=ColorSkin)
 
 
 class BaseplateSpec(BaseModel):
-    drawer_x: float
-    drawer_y: float
-    bed_x: float = 256.0
-    bed_y: float = 256.0
-    clearance: float = 0.5
+    drawer_x: float = Field(ge=20, le=2000)
+    drawer_y: float = Field(ge=20, le=2000)
+    bed_x: float = Field(256.0, ge=50, le=1000)
+    bed_y: float = Field(256.0, ge=50, le=1000)
+    clearance: float = Field(0.5, ge=0, le=50)
     magnets: bool = False
     one_sided: bool = False

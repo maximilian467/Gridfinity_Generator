@@ -5,7 +5,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, Field
 
 from .. import storage
 from ..geometry.samples import synthetic_pliers
@@ -15,6 +17,16 @@ from ..vision import a4, contour, exif, hands, pose, profile, segment
 router = APIRouter(prefix="/objects", tags=["objects"])
 
 VIEW_SCALE = 0.5          # Anzeigebild der entzerrten Ansicht
+MAX_PHOTO_BYTES = 40 * 1024 * 1024
+MAX_MASK_BYTES = 8 * 1024 * 1024
+PHOTO_TYPES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+async def _read_limited(file: UploadFile, limit: int) -> bytes:
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(413, f"Datei zu groß (max. {limit // (1024 * 1024)} MB)")
+    return data
 PREVIEW_MAX = 2000        # Anzeigebild des Originals
 
 
@@ -63,13 +75,16 @@ def _process_corners(spec: ObjectSpec, view: str, bgr, f35, corners) -> dict:
     return rect
 
 
+Pt = Annotated[list[Annotated[float, Field(ge=-1e5, le=1e5)]], Field(min_length=2, max_length=2)]
+
+
 class CornersBody(BaseModel):
-    corners_px: list[list[float]]
+    corners_px: Annotated[list[Pt], Field(min_length=4, max_length=4)]
 
 
 class SegmentBody(BaseModel):
-    pos: list[list[float]] = []
-    neg: list[list[float]] = []
+    pos: Annotated[list[Pt], Field(max_length=50)] = []
+    neg: Annotated[list[Pt], Field(max_length=50)] = []
     fill_holes: bool = True
     use_sam: bool = True
     remove_hand: bool = True
@@ -78,13 +93,17 @@ class SegmentBody(BaseModel):
 class ProfileBody(BaseModel):
     side_flip_lr: bool | None = None
     side_flip_ud: bool | None = None
-    calipers: dict[str, float] | None = None
-    profile_overrides: dict[str, list[float]] | None = None
+    calipers: dict[str, Annotated[float, Field(ge=0, le=2000)]] | None = Field(None, max_length=4)
+    profile_overrides: dict[str, Annotated[list[float], Field(max_length=20000)]] | None = Field(None, max_length=2)
+
+
+class NameBody(BaseModel):
+    name: str = Field("Neues Objekt", max_length=120)
 
 
 @router.post("", response_model=ObjectSpec)
-def create(body: dict) -> ObjectSpec:
-    return storage.create_object(body.get("name") or "Neues Objekt")
+def create(body: NameBody) -> ObjectSpec:
+    return storage.create_object(body.name.strip() or "Neues Objekt")
 
 
 @router.post("/demo", response_model=ObjectSpec)
@@ -106,9 +125,9 @@ def get(oid: str) -> ObjectSpec:
 
 
 @router.put("/{oid}", response_model=ObjectSpec)
-def rename(oid: str, body: dict) -> ObjectSpec:
+def rename(oid: str, body: NameBody) -> ObjectSpec:
     spec = _obj(oid)
-    spec.name = body.get("name", spec.name)
+    spec.name = body.name.strip() or spec.name
     storage.save_object(spec)
     return spec
 
@@ -125,14 +144,20 @@ async def upload_photo(oid: str, view: str, file: UploadFile = File(...)) -> dic
     spec = _obj(oid)
     d = storage.object_dir(oid)
     ext = Path(file.filename or "x.jpg").suffix.lower() or ".jpg"
+    if ext not in PHOTO_TYPES:
+        raise HTTPException(415, "Bitte ein Foto als JPG, PNG oder WebP hochladen")
+    data = await _read_limited(file, MAX_PHOTO_BYTES)
     name = f"{view}_original{ext}"
+    tmp = d / f".upload{ext}"
+    tmp.write_bytes(data)
+    try:
+        bgr, f35 = exif.load_image(tmp)
+    except Exception:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(422, "Bild nicht lesbar (beschädigt oder zu groß)") from None
     for old in d.glob(f"{view}_*"):
         old.unlink()
-    (d / name).write_bytes(await file.read())
-    try:
-        bgr, f35 = exif.load_image(d / name)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(422, f"Bild nicht lesbar: {e}") from e
+    tmp.replace(d / name)
     h, w = bgr.shape[:2]
     k = min(1.0, PREVIEW_MAX / max(h, w))
     _write_jpg(d / f"{view}_preview.jpg", cv2.resize(bgr, None, fx=k, fy=k, interpolation=cv2.INTER_AREA))
@@ -244,10 +269,14 @@ async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_ho
     _check_view(view)
     spec = _obj(oid)
     bgr, _, ph = _load(spec, view)
-    data = np.frombuffer(await file.read(), np.uint8)
-    m = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
-    if m is None:
-        raise HTTPException(422, "PNG nicht lesbar")
+    raw = await _read_limited(file, MAX_MASK_BYTES)
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+        m = np.asarray(Image.open(BytesIO(raw)).convert("L"))     # PIL prüft die Pixelzahl (Bombenschutz)
+    except Exception:  # noqa: BLE001
+        raise HTTPException(422, "Maske nicht lesbar (PNG erwartet)") from None
     m = cv2.resize(m, (a4.RECT_W, a4.RECT_H), interpolation=cv2.INTER_NEAREST)
     mask = ((m > 127).astype(np.uint8)) * 255
     rect = a4.rectify(bgr, np.asarray(ph["corners_px"], np.float32))

@@ -1,11 +1,14 @@
 """Bild laden (EXIF-Orientierung), Brennweite (35mm-äquivalent)."""
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
 
+Image.MAX_IMAGE_PIXELS = 64_000_000          # Schutz vor Dekompressionsbomben
+warnings.simplefilter("error", Image.DecompressionBombWarning)   # schon ab dem Grenzwert abbrechen
 FOCAL_35MM_TAG = 0xA405
 EXIF_IFD = 0x8769
 

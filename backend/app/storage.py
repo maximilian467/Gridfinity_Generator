@@ -1,6 +1,7 @@
 """Dateisystem-Persistenz: data/objects/<id>/object.json, data/inserts/<id>/insert.json."""
 from __future__ import annotations
 
+import re
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -20,12 +21,26 @@ def new_id() -> str:
     return uuid.uuid4().hex[:10]
 
 
+ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
+class InvalidId(KeyError):
+    pass
+
+
+def check_id(i: str) -> str:
+    """IDs landen in Dateipfaden: nur harmlose Zeichen erlauben (kein '..', '/', '\')."""
+    if not isinstance(i, str) or not ID_RE.match(i):
+        raise InvalidId(i)
+    return i
+
+
 def object_dir(oid: str) -> Path:
-    return _root("objects") / oid
+    return _root("objects") / check_id(oid)
 
 
 def insert_dir(iid: str) -> Path:
-    return _root("inserts") / iid
+    return _root("inserts") / check_id(iid)
 
 
 def url_for(path: Path) -> str:

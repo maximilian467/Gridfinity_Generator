@@ -8,6 +8,10 @@ import type { BaseplateSpec, InsertSpec, Job, LayoutOut, ObjectSpec, PhotoMeta }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch('/api' + url, init)
+  if (r.status === 401) {
+    window.dispatchEvent(new Event('auth-required'))      // App zeigt die Anmeldung
+    throw new Error('Bitte anmelden')
+  }
   if (!r.ok) {
     let msg = r.statusText
     try { const j = await r.json(); msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail) } catch { /* leer */ }
@@ -20,6 +24,8 @@ const json = (method: string, body?: unknown): RequestInit => ({
 })
 
 export const api = {
+  me: () => req<{ user: string; auth: boolean }>('/auth/me'),
+  logout: () => req('/auth/logout', json('POST')),
   objects: () => req<ObjectSpec[]>('/objects'),
   object: (id: string) => req<ObjectSpec>(`/objects/${id}`),
   createObject: (name: string) => req<ObjectSpec>('/objects', json('POST', { name })),

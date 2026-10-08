@@ -28,6 +28,8 @@ def _job_file(out_dir: Path) -> Path:
 
 def submit(kind: str, fn, out_dir: Path, *args) -> str:
     """fn(out_dir_str, *args) -> dict(outputs, checks). Gibt die job_id zurück."""
+    if busy():
+        raise Busy("Es laufen bereits mehrere Berechnungen. Bitte kurz warten.")
     job_id = uuid.uuid4().hex[:10]
     out_dir = out_dir / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -50,7 +52,21 @@ def submit(kind: str, fn, out_dir: Path, *args) -> str:
     return job_id
 
 
+MAX_RUNNING = 4
+
+
+class Busy(RuntimeError):
+    pass
+
+
+def busy() -> bool:
+    with _lock:
+        return sum(1 for j in _jobs.values() if j["status"] == "running") >= MAX_RUNNING
+
+
 def get(job_id: str) -> dict | None:
+    if not job_id.isalnum() or len(job_id) > 40:      # wird in einem Glob-Muster verwendet
+        return None
     with _lock:
         job = _jobs.get(job_id)
     if job is not None:
