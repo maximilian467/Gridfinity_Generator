@@ -18,3 +18,6 @@ Tests: `cd backend; uv run pytest`
 4. Zuerst den Passform-Test drucken und das Spiel anpassen.
 
 Plan und Konventionen: `docs/PLAN.md`, `CLAUDE.md`. Synthetische Testfotos: `scripts/make_synthetic_photos.py`.
+
+## Betrieb auf dem Mini-PC
+Docker-Container auf `buntu-1` (Tailscale), öffentlich per Tailscale Funnel. Login: `admin@admin.com` / `admin` (in `.env` änderbar). Details und Update-Befehle: `docs/DEPLOYMENT.md`.
