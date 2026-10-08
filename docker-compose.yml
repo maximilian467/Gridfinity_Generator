@@ -1,0 +1,17 @@
+services:
+  gridfinity:
+    build: .
+    image: gridfinity-generator:latest
+    container_name: gridfinity
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8000"        # nur lokal; öffentlich macht es Tailscale Funnel
+    env_file: .env
+    environment:
+      APP_ENV: prod
+      COOKIE_SECURE: "1"
+      TRUST_PROXY: "1"
+    volumes:
+      - ./data:/app/data             # Scans, Einlagen, Exporte, SAM-Gewichte, Sitzungsschlüssel
+    mem_limit: 8g
+    cpus: 5
