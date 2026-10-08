@@ -165,6 +165,11 @@ InsertSpec
 5. **Kantenverfeinerung**: Band = Maskenrand ±1.5 mm (15 px). Papier-Helligkeit = Median von L im Ring außerhalb des Bands, Objekt = Median innerhalb der Maske; Schwelle = Mittelwert. Band-Pixel neu klassifizieren, morph. Open/Close 3 px, nur die mit dem SAM-Kern verbundene Komponente behalten.
 6. Nutzer kann im Masken-Editor (react-konva) Pinsel (hinzufügen/radieren) und Klicks (+/−, löst SAM neu aus) verwenden; manuelle Maske wird als PNG hochgeladen.
 
+> **Umsetzungsnotizen Phase 3 (Abweichungen):**
+> - Segmentierung ist primär **klassisch** (Otsu auf Lab-L innerhalb des Blattes + Klicks wählen/entfernen Regionen + Kantenverfeinerung). SAM 2.1 wird genutzt, sobald `data/models/sam2.1_b.pt` existiert (Download erfordert Freigabe durch den Nutzer); MediaPipe-Hände sind (noch) nicht integriert, negative Klicks/Radierer übernehmen das.
+> - **Parallaxenkorrektur** nicht als Eckpunkt-Formel, sondern per **Visual Hull**: ein Punkt q der Papierebene gehört zum Fußabdruck, wenn die Projektionen seiner senkrechten Strecke (Höhen `bottom(s)`..`top(s)`; Seitenfoto: 0..`Breite(s)`) in der Silhouette liegen (`profile.correct_polygon`). Eckpunkt-Klassifizierung (außen=oben/innen=unten) erzeugte Spitzen an den Verbindungskanten.
+> - Synthetische Tests (Lochkamera-Rendering, Rauschen, Unschärfe): Länge ±0.1, Breite ±0.15, Dicke ±0.3 mm.
+
 ### D. Kontur (`vision/contour.py`)
 - Größte Außenkontur, **Löcher füllen** (Default an, z. B. Lücke zwischen Zangengriffen), Douglas-Peucker 0.1 mm, `shapely.make_valid`.
 - PCA → Längsachse auf +x drehen, `s=0` am linken Ende. Länge/Breite berechnen und im UI als Maßlinien anzeigen.
