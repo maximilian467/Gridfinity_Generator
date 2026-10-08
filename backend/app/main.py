@@ -27,7 +27,7 @@ SECURITY_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
 }
 CSP = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
-       "script-src 'self'; connect-src 'self' blob: data:; font-src 'self' data:; worker-src 'self' blob:; "
+       "script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' blob: data:; font-src 'self' data:; worker-src 'self' blob:; "
        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 
 
@@ -111,7 +111,7 @@ app.include_router(api)
 if FRONTEND_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
-    @app.get("/{path:path}", include_in_schema=False)
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     def spa(path: str) -> FileResponse:
         root = FRONTEND_DIST.resolve()
         f = (root / path).resolve()

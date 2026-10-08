@@ -141,3 +141,8 @@ def test_ids_rejected_directly():
             storage.object_dir(bad)
         with pytest.raises(KeyError):
             storage.insert_dir(bad)
+
+
+def test_csp_allows_wasm_but_not_eval(open_client):
+    from app.main import CSP
+    assert "'wasm-unsafe-eval'" in CSP and "'unsafe-eval'" not in CSP.replace("'wasm-unsafe-eval'", "")
