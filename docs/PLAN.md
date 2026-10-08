@@ -273,7 +273,7 @@ Design-Read vorgeben (vor dem Bauen mit dem Skill bestätigen): *„Präzises We
 
 **Phase 1 – Gridfinity-Kern**
 - `geometry/gridfinity.py`, `checks.py`, `export/stl.py`, `export/step.py`.
-- Tests: 3×5×6-Bin solid mit Rand → Bounding Box 125.5 × 209.5 × 46.4 mm (±0.05), Körperoberkante z=42.0, 15 Füße (Querschnitt bei z=1 mm → 15 Flächen à 35.6+…), gültig, 1 Körper, STL wasserdicht. Baseplate 3×3: 126 × 126 × 4.65 (ggf. + Unterbau laut cq-gridfinity, dann Test anpassen und dokumentieren).
+- Tests: 3×5×6-Bin solid mit Rand → Bounding Box 125.5 × 209.5 × **45.8** mm (±0.05; **Abweichung**: cq-gridfinity hat 3.8 mm Stapelrand statt 4.4; ohne Stapelrand wird selbst bei z=42 plan abgeschnitten, da `no_lip` der Lib nur das Innenprofil ändert), Körperoberkante z=42.0, 15 Füße (Querschnitt bei z=1 mm → 15 Flächen à 35.6+…), gültig, 1 Körper, STL wasserdicht. Baseplate 3×3: 126 × 126 × **4.75** (**Abweichung**: cq-gridfinity-Baseplate ist 4.75 mm hoch statt 4.65).
 
 **Phase 2 – Einlagen-Geometrie ohne Fotos**
 - `zones.py`, `layout.py`, `cutters.py`, `insert_cad.py`, `color_parts.py`, alle Exporte inkl. `threemf_bambu.py`, `glb.py`, `fit_test.py`.
