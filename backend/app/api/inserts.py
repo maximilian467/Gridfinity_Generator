@@ -34,7 +34,8 @@ def layout_payload(spec: InsertSpec) -> dict:
         "pieces": [{"placement": p.placement, "zone": p.zone, "z0": p.z0, "depth": lay.z_surface - p.z0,
                     "polygons": _polys(p.poly)} for p in lay.pieces],
         "grips": [{"z0": g.z0, "depth": lay.z_surface - g.z0, "polygons": _polys(g.poly), "auto": g.auto,
-                   "placement": g.placement, "rounded": g.rounded} for g in lay.grips],
+                   "placement": g.placement, "rounded": g.rounded,
+                   "params": g.params.model_dump() if g.params else None} for g in lay.grips],
         "compartments": [{"z0": c.z0, "depth": lay.z_surface - c.z0, "polygons": _polys(c.poly), "auto": c.auto}
                          for c in lay.comps],
         "shift": list(lay.shift),
@@ -95,7 +96,8 @@ def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
 
     spec = spec.model_copy(update={"id": iid}) if spec else get(iid)
     layout_payload(spec)
-    lay = compute_layout(spec.model_copy(update={"auto_compartments": False}), storage.objects_for(spec))
+    keep = [c for c in spec.compartments if not c.generated]
+    lay = compute_layout(spec.model_copy(update={"auto_compartments": False, "compartments": keep}), storage.objects_for(spec))
     sx, sy = lay.shift
     depth = spec.comp_depth or (lay.z_surface - FOOT_H - spec.floor_min)
     out = []
@@ -104,7 +106,7 @@ def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
         from shapely import affinity
         p = affinity.translate(poly, -sx, -sy)
         x0, y0, x1, y1 = p.bounds
-        out.append(Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, depth=round(depth, 1),
+        out.append(Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, depth=round(depth, 1), generated=True,
                                polygon=[list(map(lambda v: round(v, 2), c)) for c in p.exterior.coords]))
     return {"compartments": [c.model_dump() for c in out]}
 

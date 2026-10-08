@@ -42,7 +42,7 @@ export interface ObjectSpec {
 
 export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
 export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean }
-export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number; polygon?: [number, number][] | null }
+export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number; polygon?: [number, number][] | null; generated?: boolean }
 
 export interface InsertSpec {
   id: string
@@ -82,7 +82,7 @@ export interface PolyOut { exterior: [number, number][]; holes: [number, number]
 export interface LayoutOut {
   grid_x: number; grid_y: number; height_u: number; z_surface: number; outer: [number, number]
   pieces: { placement: number; zone: number; z0: number; depth: number; polygons: PolyOut[] }[]
-  grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean }[]
+  grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean; params: GripRecess | null }[]
   compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean }[]
   shift: [number, number]
   zones: { a: number; b: number; floor: number }[][]

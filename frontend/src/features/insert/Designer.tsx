@@ -112,15 +112,53 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const usable = (objects.data ?? []).filter((o) => o.profile)
   const addObject = (oid: string) => objMap[oid] && patch({ placements: [...spec.placements, placeNew(spec, objMap, objMap[oid])] })
   const doArrange = () => patch({ placements: arrange(spec, objMap) })
-  const addGrip = () => {
-    // Standard: quer über die Mitte des ersten Objekts (dort greift man meist zu)
-    const p = spec.placements[0], o = p && objMap[p.object_id]
-    const g = o
-      ? { x: p.x + (o.length_mm / 2) * Math.cos((p.rot_deg * Math.PI) / 180), y: p.y + (o.length_mm / 2) * Math.sin((p.rot_deg * Math.PI) / 180), l: o.width_mm + 16, rot: p.rot_deg + 90 }
-      : { x: 30, y: 30, l: 30, rot: 0 }
-    patch({ grip_recesses: [...spec.grip_recesses, { shape: 'stadium', x: Math.round(g.x), y: Math.round(g.y), w: 16, l: Math.round(g.l), rot_deg: g.rot % 360, depth_below: 10 }] })
-    setSel({ kind: 'grip', index: spec.grip_recesses.length })
-  }
+  // Greifmulde: das Backend berechnet sie am Schwerpunkt (auto_grip), das Frontend übernimmt sie
+  // sofort als normale Mulde -> direkt verschiebbar, drehbar, löschbar.
+  const addGrip = () => patch({ auto_grip: true })
+  const lay0 = layout.data
+  useEffect(() => {
+    if (!spec.auto_grip || !lay0 || layout.isPlaceholderData) return
+    const params = lay0.grips.filter((g) => g.auto && g.params).map((g) => g.params!)
+    if (!params.length && spec.placements.length) return
+    const r = (v: number) => Math.round(v * 10) / 10
+    setSpec((sp) => ({
+      ...sp, auto_grip: false,
+      grip_recesses: [...sp.grip_recesses, ...params.map((g) => ({ ...g, x: r(g.x), y: r(g.y), l: r(g.l), rot_deg: r(g.rot_deg) }))],
+    }))
+    if (params.length) setSel({ kind: 'grip', index: spec.grip_recesses.length })
+  }, [lay0, spec.auto_grip]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Kästen: in den freien Flächen erzeugen, danach einzeln anwählbar und löschbar
+  const genComps = useMutation({
+    mutationFn: () => api.autoCompartments({ ...spec, auto_compartments: false }),
+    onSuccess: (r) => {
+      setSpec((sp) => ({ ...sp, auto_compartments: false,
+        compartments: [...sp.compartments.filter((c) => !c.generated), ...r.compartments.map((c) => ({ ...c, generated: true }))] }))
+      setSel(null)
+    },
+  })
+  // ältere Einlagen mit 'Kästen automatisch' einmalig in bearbeitbare Kästen umwandeln
+  useEffect(() => { if (initial.auto_compartments) genComps.mutate() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const clearComps = () => { patch({ compartments: spec.compartments.filter((c) => !c.generated) }); setSel(null) }
+  const nGenerated = spec.compartments.filter((c) => c.generated).length
+
+  // Entf-Taste löscht das ausgewählte Element
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (!sel || (e.key !== 'Delete' && e.key !== 'Backspace') || t?.closest?.('input, textarea, select')) return
+      e.preventDefault()
+      setSpec((s) => ({
+        ...s,
+        placements: sel.kind === 'placement' ? s.placements.filter((_, i) => i !== sel.index) : s.placements,
+        grip_recesses: sel.kind === 'grip' ? s.grip_recesses.filter((_, i) => i !== sel.index) : s.grip_recesses,
+        compartments: sel.kind === 'comp' ? s.compartments.filter((_, i) => i !== sel.index) : s.compartments,
+      }))
+      setSel(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sel])
   const addComp = () => {
     patch({ compartments: [...spec.compartments, { x: 10, y: 10, w: 25, l: 25, radius: 3, depth: 15 }] })
     setSel({ kind: 'comp', index: spec.compartments.length })
@@ -156,23 +194,32 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         <section className="grid gap-2">
           <h3 className="sect">Automatik</h3>
           <Check label="Inhalt mittig ausrichten" checked={spec.auto_center} onChange={(v) => patch({ auto_center: v })} />
-          <Check label="Greifmulde unter dem Werkzeug" checked={spec.auto_grip} onChange={(v) => patch({ auto_grip: v })} />
-          {spec.auto_grip && (
-            <div className="grid grid-cols-2 gap-2 pl-6">
+          <div className="grid gap-2 mt-1">
+            <div className="text-sm font-medium">Greifmulde (Langloch unter dem Werkzeug)</div>
+            <div className="grid grid-cols-2 gap-2">
               <NumberField label="Breite" value={spec.grip_width} step={1} min={8} onChange={(v) => patch({ grip_width: v })} />
               <NumberField label="Überstand je Seite" value={spec.grip_overhang} step={1} min={0} onChange={(v) => patch({ grip_overhang: v })} />
               <NumberField label="Tiefe unter Werkzeug" value={spec.grip_depth_below} step={1} min={2} onChange={(v) => patch({ grip_depth_below: v })} />
             </div>
-          )}
-          {spec.auto_grip && <div className="hint mt-0 pl-6">Langloch quer am Schwerpunkt, Boden rund ausgeformt. Hier greift man unter das Werkzeug.</div>}
-          <Check label="Kästen in freien Flächen" checked={spec.auto_compartments} onChange={(v) => patch({ auto_compartments: v })} />
-          {spec.auto_compartments && (
-            <div className="grid grid-cols-2 gap-2 pl-6">
+            <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip}><Plus size={14} /> Greifmulde automatisch setzen</button>
+            <div className="hint mt-0">Wird quer am Schwerpunkt gesetzt (bei Zangen am Gelenk), Boden rund ausgeformt. Danach frei verschieb- und drehbar.</div>
+          </div>
+          <div className="grid gap-2 mt-1">
+            <div className="text-sm font-medium">Kästen in den freien Flächen</div>
+            <div className="grid grid-cols-2 gap-2">
               <NumberField label="Mindestgröße" value={spec.comp_min_size} step={1} min={10} onChange={(v) => patch({ comp_min_size: v })} />
               <NumberField label="Wandstärke" value={spec.comp_wall} step={0.1} min={0.8} onChange={(v) => patch({ comp_wall: v })} />
               <NumberField label="Tiefe (0 = max.)" value={spec.comp_depth ?? 0} step={1} min={0} onChange={(v) => patch({ comp_depth: v > 0 ? v : null })} />
             </div>
-          )}
+            <div className="flex gap-2 flex-wrap">
+              <button className="btn btn-sm" onClick={() => genComps.mutate()} disabled={genComps.isPending || !spec.placements.length}>
+                <SquaresFour size={14} /> {nGenerated ? 'Kästen neu erzeugen' : 'Kästen erzeugen'}
+              </button>
+              {nGenerated > 0 && <button className="btn btn-sm" onClick={clearComps}><Trash size={14} /> Alle {nGenerated} entfernen</button>}
+            </div>
+            <div className="hint mt-0">Jeder Kasten lässt sich anklicken und einzeln löschen (Knopf rechts oder Entf-Taste).</div>
+            {genComps.isError && <Msg kind="err">{errText(genComps.error)}</Msg>}
+          </div>
           <label className="grid gap-1">
             <span className="label mb-0">Kontur glätten <span className="num">{spec.smooth_mm.toFixed(1)} mm</span></span>
             <input type="range" min={0} max={5} step={0.5} value={spec.smooth_mm} onChange={(e) => patch({ smooth_mm: +e.target.value })} />
@@ -245,15 +292,15 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             )}
             <button className="btn btn-sm" onClick={doArrange} disabled={!spec.placements.length} title="Objekte an die Innenecke rücken und untereinander anordnen"><Rows size={14} /> Anordnen</button>
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
-            <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length}><Plus size={14} /> Greifmulde</button>
+            <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip} title="Greifmulde automatisch am Schwerpunkt setzen"><Plus size={14} /> Greifmulde</button>
             <button className="btn btn-sm" onClick={addComp}><Plus size={14} /> Fach</button>
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
               <CrosshairSimple size={14} /> Mittig{spec.auto_center ? ' (aktiv)' : ''}
             </button>
-            <button className={`btn btn-sm ${spec.auto_compartments ? 'btn-on' : ''}`} onClick={() => patch({ auto_compartments: !spec.auto_compartments })}
-              title="Freie Flächen automatisch mit Kästen füllen">
-              <SquaresFour size={14} /> Kästen{spec.auto_compartments ? ' (an)' : ''}
+            <button className="btn btn-sm" onClick={() => genComps.mutate()} disabled={genComps.isPending || !spec.placements.length}
+              title="Freie Flächen mit Kästen füllen; danach einzeln anklicken und löschen">
+              <SquaresFour size={14} /> {genComps.isPending ? 'Erzeuge …' : nGenerated ? 'Kästen neu' : 'Kästen erzeugen'}
             </button>
           </div>
         )}
@@ -437,6 +484,15 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap }: {
   const c = spec.compartments[sel.index]
   if (!c) return null
   const upd = (q: Partial<Compartment>) => setSpec((s) => ({ ...s, compartments: s.compartments.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
+  if (c.polygon) return (
+    <div className="grid gap-2">
+      <h3 className="sect">Kasten (folgt der Kontur)</h3>
+      <div className="num hint mt-0">ca. {Math.round(c.w)} x {Math.round(c.l)} mm</div>
+      <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />
+      <div className="hint mt-0">Mit der Maus verschiebbar. Entf-Taste oder Knopf löscht ihn.</div>
+      {del}
+    </div>
+  )
   return (
     <div className="grid gap-2">
       <h3 className="sect">Fach</h3>

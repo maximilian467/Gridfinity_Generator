@@ -31,6 +31,7 @@ class Grip:
     axis: LineString | Point        # Mittellinie (Stadion) bzw. Mittelpunkt (Kreis)
     auto: bool = False
     placement: int | None = None
+    params: GripRecess | None = None      # automatische Mulde als übernehmbare Spec (vor Zentrierung)
 
 
 @dataclass
@@ -156,7 +157,7 @@ def _make_grip(g: GripRecess, pieces: list[Piece], zmin_all: float, auto=False, 
     touched = [p.z0 for p in pieces if p.poly.intersects(gp)]
     z0 = (min(touched) if touched else zmin_all) - g.depth_below
     axis = Point(g.x, g.y) if g.shape == "circle" else _stadium_axis(g)
-    return Grip(gp, z0, g.rounded and g.shape != "rect", g.w / 2, axis, auto, placement)
+    return Grip(gp, z0, g.rounded and g.shape != "rect", g.w / 2, axis, auto, placement, g if auto else None)
 
 
 def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int, u: int) -> Layout:

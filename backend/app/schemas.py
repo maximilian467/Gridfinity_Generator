@@ -58,6 +58,7 @@ class Compartment(BaseModel):
     radius: float = 3.0
     depth: float = 15.0
     polygon: list[list[float]] | None = None   # freie Form (automatische Kästen); sonst Rechteck x,y,w,l
+    generated: bool = False                    # von 'Kästen erzeugen' angelegt (wird beim Neu-Erzeugen ersetzt)
 
 
 class ColorSlots(BaseModel):
