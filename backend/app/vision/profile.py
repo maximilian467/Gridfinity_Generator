@@ -205,6 +205,7 @@ def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, si
     if prof.missing.any():
         warns.append(f"{int(prof.missing.sum())} Profilspalten interpoliert (Finger?)")
     warns += list(top_pose.warnings) + list(side_pose.warnings)
+    warns = list(dict.fromkeys(warns))
 
     calipers = calipers or {}
     if calipers.get("length"):

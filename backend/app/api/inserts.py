@@ -83,6 +83,16 @@ def layout(iid: str, spec: InsertSpec | None = None) -> dict:
     return layout_payload(spec.model_copy(update={"id": iid}) if spec else get(iid))
 
 
+@router.post("/{iid}/auto-compartments")
+def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
+    from ..geometry.auto_compartments import propose_compartments
+
+    spec = spec.model_copy(update={"id": iid}) if spec else get(iid)
+    layout_payload(spec)
+    lay = compute_layout(spec, storage.objects_for(spec))
+    return {"compartments": [c.model_dump() for c in propose_compartments(lay, spec)]}
+
+
 @router.post("/{iid}/build")
 def build(iid: str, spec: InsertSpec | None = None) -> dict:
     spec = spec.model_copy(update={"id": iid}) if spec else get(iid)

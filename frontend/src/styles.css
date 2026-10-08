@@ -1,1 +1,97 @@
 @import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* Designsprache: technische Zeichnung. Zeichenblatt-Grau, Graphit-Tinte, ein Signalorange.
+   Eckenradius: 4px überall (Eingaben, Buttons, Panels). */
+:root {
+  --paper: #eef0ee;
+  --surface: #f8f9f7;
+  --ink: #1f2328;
+  --ink-2: #4a5057;
+  --ink-3: #666d75;
+  --line: #cfd3d0;
+  --line-2: #b5bab7;
+  --accent: #d9480f;
+  --accent-ink: #ffffff;
+  --accent-soft: #fbe3d6;
+  --ok: #2b7a4b;
+  --warn: #9a5b00;
+  --err: #b42318;
+  --grid: #d9dcd9;
+  --radius: 4px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #16191c;
+    --surface: #1d2125;
+    --ink: #e7e9e6;
+    --ink-2: #b4bab6;
+    --ink-3: #9aa1a0;
+    --line: #333a40;
+    --line-2: #46505a;
+    --accent: #ff7a3d;
+    --accent-ink: #1a0e07;
+    --accent-soft: #3a2316;
+    --ok: #5cc388;
+    --warn: #e0a64a;
+    --err: #ff8a7d;
+    --grid: #2a3035;
+  }
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.hair { border-color: var(--line); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  height: 32px; padding: 0 12px; border-radius: var(--radius);
+  border: 1px solid var(--line-2); background: var(--surface); color: var(--ink);
+  font: inherit; font-weight: 500; cursor: pointer;
+  transition: transform .12s, background-color .12s, border-color .12s;
+}
+.btn:hover:not(:disabled) { border-color: var(--ink-2); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover:not(:disabled) { border-color: var(--ink); }
+.btn-quiet { border-color: transparent; background: transparent; }
+.btn-quiet:hover:not(:disabled) { background: var(--line); border-color: transparent; }
+.btn-sm { height: 26px; padding: 0 8px; font-size: 12px; }
+.btn-on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+.input {
+  height: 32px; padding: 0 8px; border-radius: var(--radius); width: 100%;
+  border: 1px solid var(--line-2); background: var(--surface); color: var(--ink); font: inherit;
+}
+.input:focus-visible, .btn:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+.hint { font-size: 12px; color: var(--ink-3); margin-top: 4px; }
+
+.skeleton { background: linear-gradient(90deg, var(--line), var(--surface), var(--line)); background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite; border-radius: var(--radius); }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } .btn { transition: none; } }
+
+.msg { padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--line-2); font-size: 13px; }
+.msg-warn { border-color: var(--warn); color: var(--warn); }
+.msg-err { border-color: var(--err); color: var(--err); }
+.msg-ok { border-color: var(--ok); color: var(--ok); }

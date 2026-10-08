@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .api import baseplates as baseplates_api
 from .api import inserts as inserts_api
 from .api import jobs as jobs_api
 from .api import objects as objects_api
@@ -36,6 +37,7 @@ def files(path: str) -> FileResponse:
 api.include_router(objects_api.router)
 api.include_router(inserts_api.router)
 api.include_router(jobs_api.router)
+api.include_router(baseplates_api.router)
 app.include_router(api)
 
 

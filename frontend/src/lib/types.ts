@@ -1,0 +1,85 @@
+// Spiegel von backend/app/schemas.py
+
+export interface Profile { ds: number; s: number[]; bottom: number[]; top: number[] }
+
+export interface PhotoMeta {
+  original: string
+  preview_url: string
+  preview_scale: number
+  size: [number, number]
+  f35: number | null
+  corners_found: boolean
+  corners_px: [number, number][]
+  pose?: { C_mm: [number, number, number]; f_px: number; f35_assumed: boolean; warnings: string[] }
+  rectified_url?: string
+  view_scale?: number
+  rect_size?: [number, number]
+  mask_url?: string
+  overlay_url?: string
+  fill_holes?: boolean
+}
+
+export interface ObjectSpec {
+  id: string
+  name: string
+  created_at: string
+  contour_mm: [number, number][]
+  length_mm: number
+  width_mm: number
+  profile: Profile | null
+  side_flip_lr: boolean | null
+  side_flip_ud: boolean
+  flip_lr_used: boolean | null
+  tilt_deg: number
+  calipers: Record<string, number>
+  warnings: string[]
+  photos: Record<string, PhotoMeta>
+}
+
+export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
+export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number }
+export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number }
+
+export interface InsertSpec {
+  id: string
+  name: string
+  grid_x: number | null
+  grid_y: number | null
+  height_u: number | null
+  stacking_lip: boolean
+  magnets: boolean
+  clearance_xy: number
+  clearance_end: number
+  clearance_z: number
+  overhang: number
+  step_tol: number
+  min_zone_len: number
+  max_zones: number
+  floor_min: number
+  min_wall: number
+  placements: Placement[]
+  grip_recesses: GripRecess[]
+  compartments: Compartment[]
+  colors: { body: number; pocket: number; grip: number; compartment: number }
+  color_skin: { floor: number; wall: number; show_top_ring: boolean }
+}
+
+export interface PolyOut { exterior: [number, number][]; holes: [number, number][][] }
+export interface LayoutOut {
+  grid_x: number; grid_y: number; height_u: number; z_surface: number; outer: [number, number]
+  pieces: { placement: number; zone: number; z0: number; depth: number; polygons: PolyOut[] }[]
+  grips: { z0: number; depth: number; polygons: PolyOut[] }[]
+  compartments: { z0: number; depth: number; polygons: PolyOut[] }[]
+  zones: { a: number; b: number; floor: number }[][]
+  warnings: string[]
+}
+
+export interface Job {
+  id: string; kind: string; status: 'running' | 'done' | 'error'; progress: number
+  outputs: Record<string, string>; checks: Record<string, any>; warnings: string[]; error: string | null
+}
+
+export interface BaseplateSpec {
+  drawer_x: number; drawer_y: number; bed_x: number; bed_y: number
+  clearance: number; magnets: boolean; one_sided: boolean
+}
