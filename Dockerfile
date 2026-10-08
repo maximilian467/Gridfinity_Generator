@@ -14,7 +14,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.19 /uv /usr/local/bin/uv
 WORKDIR /app/backend
 COPY backend/pyproject.toml backend/uv.lock ./
 # PyTorch (für SAM) in der CPU-Variante: spart mehrere GB CUDA-Bibliotheken
-RUN uv export --frozen --no-dev --no-hashes --no-emit-project -o /tmp/req.txt \
+RUN uv export --frozen --no-dev --no-hashes --no-emit-project -o /tmp/req-all.txt \
+ && grep -viE '^(nvidia-|triton|cuda-)' /tmp/req-all.txt > /tmp/req.txt \
  && uv venv /opt/venv --python 3.11 \
  && VIRTUAL_ENV=/opt/venv uv pip install --no-cache torch torchvision --index-url https://download.pytorch.org/whl/cpu \
  && VIRTUAL_ENV=/opt/venv uv pip install --no-cache -r /tmp/req.txt --extra-index-url https://download.pytorch.org/whl/cpu \
