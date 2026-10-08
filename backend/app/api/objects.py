@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from .. import storage
 from ..geometry.samples import synthetic_pliers
 from ..schemas import ObjectSpec, Profile
-from ..vision import a4, contour, exif, pose, profile, segment
+from ..vision import a4, contour, exif, hands, pose, profile, segment
 
 router = APIRouter(prefix="/objects", tags=["objects"])
 
@@ -72,6 +72,7 @@ class SegmentBody(BaseModel):
     neg: list[list[float]] = []
     fill_holes: bool = True
     use_sam: bool = True
+    remove_hand: bool = True
 
 
 class ProfileBody(BaseModel):
@@ -158,7 +159,8 @@ def set_corners(oid: str, view: str, body: CornersBody) -> dict:
     return spec.photos[view]
 
 
-def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, fill_holes: bool) -> dict:
+def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, fill_holes: bool,
+               hand: np.ndarray | None = None) -> dict:
     d = storage.object_dir(spec.id)
     ph = spec.photos[view]
     cv2.imwrite(str(d / f"{view}_mask.png"), mask)
@@ -168,6 +170,11 @@ def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, 
     tint[m] = (0.45 * tint[m] + 0.55 * np.array([30, 120, 255])).astype(np.uint8)
     cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     cv2.drawContours(tint, cnts, -1, (0, 60, 255), 1)
+    if hand is not None and hand.any():
+        hm = cv2.resize(hand, (over.shape[1], over.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        stripes = ((np.add.outer(np.arange(hm.shape[0]), np.arange(hm.shape[1])) // 6) % 2 == 0)
+        sel = hm & stripes
+        tint[sel] = (0.35 * tint[sel] + 0.65 * np.array([90, 90, 90])).astype(np.uint8)
     _write_jpg(d / f"{view}_overlay.jpg", tint)
     ph["mask_url"] = storage.url_for(d / f"{view}_mask.png")
     ph["overlay_url"] = storage.url_for(d / f"{view}_overlay.jpg")
@@ -186,17 +193,37 @@ def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, 
     return info
 
 
+def _rect_of(spec: ObjectSpec, view: str) -> np.ndarray:
+    bgr, _, ph = _load(spec, view)
+    return a4.rectify(bgr, np.asarray(ph["corners_px"], np.float32))
+
+
 @router.post("/{oid}/photos/{view}/segment")
 def run_segment(oid: str, view: str, body: SegmentBody) -> dict:
     _check_view(view)
     spec = _obj(oid)
-    bgr, _, ph = _load(spec, view)
-    rect = a4.rectify(bgr, np.asarray(ph["corners_px"], np.float32))
+    ph = _photo(spec, view)
+    rect = _rect_of(spec, view)
     ph["prompts"] = {"pos": body.pos, "neg": body.neg}
     mask = segment.segment(rect, body.pos, body.neg, use_sam=body.use_sam)
     if mask.max() == 0:
-        raise HTTPException(422, "Nichts erkannt: Ecken prüfen oder positiven Klick setzen")
-    info = _save_mask(spec, view, rect, mask, body.fill_holes)
+        raise HTTPException(422, "Kein Werkzeug gefunden. Ecken prüfen oder mit 'Auswählen' auf das Werkzeug klicken.")
+    hand_info: dict = {"hand_removed": False}
+    hand = None
+    ph.pop("cut_point_mm", None)
+    top_mask_f = storage.object_dir(oid) / "top_mask.png"
+    if view == "side" and body.remove_hand and top_mask_f.exists() and "top" in spec.photos:
+        res = hands.remove_hand(rect, mask, _rect_of(spec, "top"), cv2.imread(str(top_mask_f), cv2.IMREAD_GRAYSCALE))
+        if res.applied:
+            mask, hand = res.mask, res.hand
+            # Berührungspunkt Hand/Werkzeug (Papier-mm) -> verdecktes Ende fürs Profil
+            near = cv2.dilate(mask, np.ones((61, 61), np.uint8)) > 0
+            ys, xs = np.nonzero((hand > 0) & near)
+            if len(xs):
+                ph["cut_point_mm"] = a4.rect_px_to_mm([[float(xs.mean()), float(ys.mean())]])[0].tolist()
+            hand_info = {"hand_removed": True, "hand_frac": round(res.removed_frac, 3)}
+    info = _save_mask(spec, view, rect, mask, body.fill_holes, hand)
+    info.update(hand_info)
     info["sam_used"] = bool(body.use_sam and segment.sam_available() and (body.pos or body.neg))
     return info
 
@@ -236,7 +263,7 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
         pj = ph["pose"]
         poses[view] = pose.CameraPose(tuple(pj["C_mm"]), pj["f_px"], pj["f35_assumed"], tuple(pj["warnings"]))
     g = profile.build_object(polys["top"], polys["side"], poses["top"], poses["side"], spec.side_flip_lr,
-                             spec.side_flip_ud, spec.calipers)
+                             spec.side_flip_ud, spec.calipers, cut_point=spec.photos["side"].get("cut_point_mm"))
     ov = body.profile_overrides or {}
     bottom, top = g.profile.bottom.tolist(), g.profile.top.tolist()
     for key, arr in (("bottom", bottom), ("top", top)):
@@ -253,5 +280,6 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
     spec.flip_lr_used = g.profile.flip_lr
     spec.tilt_deg = round(g.profile.tilt_deg, 2)
     spec.warnings = g.warnings
+    spec.profile_missing = g.profile.missing.tolist()
     storage.save_object(spec)
     return spec

@@ -25,6 +25,7 @@ class ObjectSpec(BaseModel):
     side_flip_ud: bool = False
     flip_lr_used: bool | None = None
     tilt_deg: float = 0.0
+    profile_missing: list[bool] = []
     calipers: dict[str, float] = {}
     warnings: list[str] = []
     photos: dict[str, dict] = {}

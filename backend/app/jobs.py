@@ -60,3 +60,10 @@ def get(job_id: str) -> dict | None:
     for f in config.DATA_DIR.glob(f"**/{job_id}/job.json"):
         return json.loads(f.read_text(encoding="utf-8"))
     return None
+
+
+def shutdown() -> None:
+    global _pool
+    if _pool is not None:
+        _pool.shutdown(wait=False, cancel_futures=True)
+        _pool = None

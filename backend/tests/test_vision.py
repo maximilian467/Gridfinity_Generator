@@ -125,3 +125,45 @@ def test_sam_path_matches_truth():
     got = mask_to_polygon(m)
     truth = Polygon(poly)
     assert got.symmetric_difference(truth).area / truth.length < 0.6
+
+
+def test_corners_with_occluded_corner_and_bright_neighbour():
+    import cv2
+    cam = camera()
+    img = render(rot_rect(150, 100, 100, 30, 20), 5, cam, seed=4)
+    truth = project(*cam[:3], np.hstack([TRUE_CORNERS, np.zeros((4, 1))]))
+    # Hand über der linken oberen Ecke, helles Etikett am rechten Blattrand
+    tl = truth[0]
+    cv2.ellipse(img, (int(tl[0] + 60), int(tl[1] + 40)), (260, 170), 20, 0, 360, (120, 150, 210), -1)
+    tr, br = truth[1], truth[2]
+    x = int(max(tr[0], br[0]))
+    cv2.rectangle(img, (x - 5, int((tr[1] + br[1]) / 2) - 200), (x + 260, int((tr[1] + br[1]) / 2) + 200), (240, 242, 244), -1)
+    c = find_a4_corners(img)
+    assert c is not None
+    assert np.abs(c - truth).max() < 4.0
+
+
+def test_hand_removed_from_side_photo():
+    import cv2
+    from app.vision.hands import remove_hand
+    L, W, T = 150.0, 38.0, 14.0
+    top_img = render(rot_rect(140, 110, L, W, 25), T, camera(offset=(-10, 5)), seed=1, tool=60)
+    side_poly = rot_rect(160, 100, L, T, 0)
+    side_img = render(side_poly, W, camera(offset=(5, -10)), seed=2, tool=60)
+    # "Hand": hautfarbene Fläche, die das linke Ende verdeckt und über den Blattrand ragt
+    K, rvec, t, _ = camera(offset=(5, -10))
+    end = project(K, rvec, t, [[160 - L / 2 + 5, 100, 0]])[0]
+    cv2.ellipse(side_img, (int(end[0]) - 180, int(end[1])), (230, 150), 0, 0, 360, (95, 120, 175), -1)
+    rects, masks = [], []
+    for img in (top_img, side_img):
+        r = rectify(img, find_a4_corners(img))
+        rects.append(r)
+        masks.append(segment(r, use_sam=False))
+    b0 = mask_to_polygon(masks[1]).bounds
+    assert (b0[3] - b0[1]) > T + 20          # Gegenprobe: ohne Entfernung ist die Hand in der Maske
+    res = remove_hand(rects[1], masks[1], rects[0], masks[0])
+    assert res.applied and res.removed_frac > 0.2
+    got = mask_to_polygon(res.mask)
+    b = got.bounds
+    # Rest ist ein dünner Streifen (Dicke + Parallaxe), keine Handfläche mehr
+    assert (b[3] - b[1]) < T + 8

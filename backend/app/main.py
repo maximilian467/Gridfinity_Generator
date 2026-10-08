@@ -9,7 +9,17 @@ from .api import jobs as jobs_api
 from .api import objects as objects_api
 from .config import DATA_DIR, FRONTEND_DIST
 
-app = FastAPI(title="Gridfinity-Einlagen-Generator")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    yield
+    from . import jobs
+    jobs.shutdown()          # Prozesspool nicht blockierend beenden (sonst hängt --reload)
+
+
+app = FastAPI(title="Gridfinity-Einlagen-Generator", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

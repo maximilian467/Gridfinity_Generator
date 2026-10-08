@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.ndimage import maximum_filter1d, minimum_filter1d
 from shapely import affinity
 from shapely.geometry import LineString, Polygon
 from shapely.validation import make_valid
@@ -25,6 +26,8 @@ class SideProfile:
     frame: Frame
     flip_lr: bool
     flip_ud: bool
+    cut: str | None = None
+    side_length: float = 0.0
 
 
 @dataclass
@@ -92,14 +95,38 @@ def width_profile(top_local: Polygon, grid: np.ndarray) -> np.ndarray:
     return hi - lo
 
 
+def _align(x0: float, x1: float, length: float, cut: str | None) -> tuple[float, float]:
+    """Längsausrichtung der Seitensilhouette auf die Draufsicht: s = k*(x - x0) + t.
+    cut = 'min'/'max': dieses Ende ist (z. B. von der Hand) verdeckt -> das freie Ende bündig
+    setzen, nicht skalieren. Sonst zentrieren; Skalierung nur bei kleiner Abweichung (<= 5 %)."""
+    ls = x1 - x0
+    if cut == "min":
+        return 1.0, length - ls
+    if cut == "max":
+        return 1.0, 0.0
+    k = length / ls if abs(length / ls - 1) <= 0.05 else 1.0
+    return k, (length - k * ls) / 2
+
+
+def cut_end(frame: Frame, poly: Polygon, cut_point) -> str | None:
+    """Welches Ende (lokal-x min/max) liegt am entfernten Handbereich?"""
+    if cut_point is None:
+        return None
+    loc = polygon_local(poly, frame)
+    x0, x1 = loc.bounds[0], loc.bounds[2]
+    cx = float(frame.to_local(np.asarray([cut_point], float))[0, 0])
+    return "min" if abs(cx - x0) < abs(cx - x1) else "max"
+
+
 def side_profile(side_poly: Polygon, length: float, flip_lr: bool, flip_ud: bool,
-                 frame: Frame | None = None) -> SideProfile:
+                 frame: Frame | None = None, cut_point=None) -> SideProfile:
     frame = frame or pca_frame(side_poly)
     loc = polygon_local(side_poly, frame)
     x0, x1 = loc.bounds[0], loc.bounds[2]
-    k = length / (x1 - x0)
+    cut = cut_end(frame, side_poly, cut_point)
+    k, t = _align(x0, x1, length, cut)
     loc = affinity.scale(loc, k, k, origin=(x0, 0))
-    loc = affinity.translate(loc, -x0, 0)
+    loc = affinity.translate(loc, t - x0, 0)
     if flip_lr:
         loc = affinity.scale(loc, -1, 1, origin=(length / 2, 0))
     if flip_ud:
@@ -108,7 +135,10 @@ def side_profile(side_poly: Polygon, length: float, flip_lr: bool, flip_ud: bool
     grid = np.arange(0, length + DS / 2, DS)
     lo, hi, missing = columns(loc, grid)
     z0 = lo.min()
-    return SideProfile(grid, lo - z0, hi - z0, missing, float(k), tilt, frame, flip_lr, flip_ud)
+    sp = SideProfile(grid, lo - z0, hi - z0, missing, float(k), tilt, frame, flip_lr, flip_ud)
+    sp.cut = cut
+    sp.side_length = float(x1 - x0)
+    return sp
 
 
 def _corr(a: np.ndarray, b: np.ndarray) -> float:
@@ -117,13 +147,16 @@ def _corr(a: np.ndarray, b: np.ndarray) -> float:
     return float((a * b).mean())
 
 
-def auto_flip_lr(side_poly: Polygon, top_local: Polygon, length: float) -> bool:
+def auto_flip_lr(side_poly: Polygon, top_local: Polygon, length: float, cut_point=None) -> bool:
     grid = np.arange(0, length + DS / 2, DS)
     wp = width_profile(top_local, grid)
     best, best_c = False, -2.0
     for flip in (False, True):
-        sp = side_profile(side_poly, length, flip, False)
-        c = _corr(wp, sp.top - sp.bottom)
+        sp = side_profile(side_poly, length, flip, False, cut_point=cut_point)
+        ok = ~sp.missing
+        if ok.sum() < 10:
+            continue
+        c = _corr(wp[ok], (sp.top - sp.bottom)[ok])
         if c > best_c:
             best, best_c = flip, c
     return best
@@ -159,7 +192,8 @@ def correct_polygon(poly: Polygon, pose: CameraPose, frame: Frame, s_of_x, h_low
 
 def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, side_pose: CameraPose,
                  flip_lr: bool | None = None, flip_ud: bool = False,
-                 calipers: dict | None = None, iterations: int = 2) -> ObjectGeometry:
+                 calipers: dict | None = None, iterations: int = 2, cut_point=None) -> ObjectGeometry:
+    """cut_point: Papier-mm-Punkt des entfernten Handbereichs im Seitenfoto (oder None)."""
     warns: list[str] = []
     f_top = pca_frame(top_poly)
     top_loc = polygon_local(top_poly, f_top)
@@ -167,28 +201,36 @@ def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, si
     grid = np.arange(0, length + DS / 2, DS)
     f_side = pca_frame(side_poly)
     if flip_lr is None:
-        flip_lr = auto_flip_lr(side_poly, top_loc, length)
+        flip_lr = auto_flip_lr(side_poly, top_loc, length, cut_point)
 
-    def make_s_of_x(frame: Frame, cur: Polygon, flip: bool):
+    def side_s_of_x(frame: Frame, cur: Polygon, flip: bool, L: float):
         bx = polygon_local(cur, frame).bounds
-        mid = (bx[0] + bx[2]) / 2
+        k, t = _align(bx[0], bx[2], L, cut_end(frame, cur, cut_point))
 
         def f(x):
-            s = np.asarray(x) - mid + length / 2
-            return length - s if flip else s
+            s = k * (np.asarray(x) - bx[0]) + t
+            return L - s if flip else s
         return f
 
-    prof = side_profile(side_poly, length, flip_lr, flip_ud, f_side)
+    def top_s_of_x(frame: Frame, cur: Polygon):
+        x0 = polygon_local(cur, frame).bounds[0]
+        return lambda x: np.asarray(x) - x0
+
+    prof = side_profile(side_poly, length, flip_lr, flip_ud, f_side, cut_point)
     top_c, top_c_frame = top_poly, f_top
     side_c = side_poly
+    win = int(round(3.0 / DS)) * 2 + 1          # ±3 mm: Enden (Breite -> 0) nicht als Höhe 0 werten
     for _ in range(iterations):
-        wp = width_profile(polygon_local(top_c, top_c_frame), grid)
-        side_c = correct_polygon(side_poly, side_pose, f_side, make_s_of_x(f_side, side_c, flip_lr),
-                                 lambda s: np.zeros_like(s), lambda s: np.interp(s, grid, wp))
-        prof = side_profile(side_c, length, flip_lr, flip_ud, pca_frame(side_c))
-        top_c = correct_polygon(top_poly, top_pose, f_top, make_s_of_x(f_top, top_c, False),
-                                lambda s: np.interp(s, prof.s, prof.bottom),
-                                lambda s: np.interp(s, prof.s, prof.top))
+        top_loc_c = polygon_local(top_c, top_c_frame)
+        length = top_loc_c.bounds[2] - top_loc_c.bounds[0]
+        grid = np.arange(0, length + DS / 2, DS)
+        wp = maximum_filter1d(width_profile(top_loc_c, grid), win, mode="nearest")
+        side_c = correct_polygon(side_poly, side_pose, f_side, side_s_of_x(f_side, side_c, flip_lr, length),
+                                 lambda s: np.zeros_like(s), lambda s, g=grid, w=wp: np.interp(s, g, w))
+        prof = side_profile(side_c, length, flip_lr, flip_ud, pca_frame(side_c), cut_point)
+        top_c = correct_polygon(top_poly, top_pose, f_top, top_s_of_x(f_top, top_c),
+                                lambda s, p=prof: np.interp(s, p.s, minimum_filter1d(p.bottom, win, mode="nearest")),
+                                lambda s, p=prof: np.interp(s, p.s, maximum_filter1d(p.top, win, mode="nearest")))
         top_c_frame = pca_frame(top_c)
 
     loc = polygon_local(top_c, top_c_frame)
@@ -196,14 +238,17 @@ def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, si
     L = float(contour[:, 0].max() - contour[:, 0].min())
     W = float(contour[:, 1].max() - contour[:, 1].min())
     # Seite erneut passend zur korrigierten Länge
-    prof = side_profile(side_c, L, flip_lr, flip_ud, pca_frame(side_c))
+    prof = side_profile(side_c, L, flip_lr, flip_ud, pca_frame(side_c), cut_point)
 
-    if abs(prof.scale - 1) > 0.03:
-        warns.append(f"Länge Seitenfoto weicht {abs(prof.scale - 1) * 100:.1f} % von der Draufsicht ab")
+    dev = prof.side_length / L - 1
+    if prof.cut and -dev * L >= 1.0:
+        warns.append(f"Seitenfoto: ein Ende war von der Hand verdeckt, {-dev * L:.0f} mm Profil ergänzt")
+    elif not prof.cut and abs(dev) > 0.03:
+        warns.append(f"Länge Seitenfoto weicht {abs(dev) * 100:.1f} % von der Draufsicht ab")
     if abs(prof.tilt_deg) > 5:
         warns.append(f"Kippwinkel Ruhelage {prof.tilt_deg:.1f}°")
-    if prof.missing.any():
-        warns.append(f"{int(prof.missing.sum())} Profilspalten interpoliert (Finger?)")
+    if prof.missing.sum() * DS >= 1.0 and not prof.cut:
+        warns.append(f"{prof.missing.sum() * DS:.0f} mm des Profils ergänzt (verdeckt oder nicht erkannt)")
     warns += list(top_pose.warnings) + list(side_pose.warnings)
     warns = list(dict.fromkeys(warns))
 
