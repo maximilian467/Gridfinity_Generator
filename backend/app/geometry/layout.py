@@ -442,6 +442,11 @@ def auto_compartments(lay: Layout, spec: InsertSpec, max_n: int = 10, grow: floa
         if hh < spec.comp_min_size or ww < spec.comp_min_size:
             break
         rect = box(x0 + c0, y0 + r0, x0 + c0 + ww, y0 + r0 + hh)
+        if not spec.comp_follow:                 # gerade Rechtecke, so groß wie frei
+            region = rect.buffer(-2.0, join_style=1).buffer(2.0, join_style=1)
+            out.append(region.simplify(0.05))
+            remaining = remaining.difference(rect.buffer(wall, join_style=2))
+            continue
         region = rect.buffer(grow, join_style=2).intersection(remaining)
         parts = _polys(region)
         if not parts:
@@ -481,3 +486,49 @@ def _check(lay: Layout, spec: InsertSpec) -> None:
 __all__ = ["Layout", "Piece", "Grip", "Comp", "compute_layout", "pocket_outline", "grip_polygon",
            "comp_polygon", "auto_compartments", "balance_point", "MultiPolygon"]
 
+
+
+def largest_rect(region, step: float = 0.5):
+    """Größtes achsparalleles Rechteck in einer (Multi-)Fläche (Raster step mm)."""
+    x0, y0, x1, y1 = region.bounds
+    xs = np.arange(x0 + step / 2, x1, step)
+    ys = np.arange(y0 + step / 2, y1, step)
+    if len(xs) == 0 or len(ys) == 0:
+        return None
+    gx, gy = np.meshgrid(xs, ys)
+    mask = contains_xy(region, gx.ravel(), gy.ravel()).reshape(gx.shape)
+    r = _max_rect(mask)
+    if r is None:
+        return None
+    r0, c0, hh, ww = r
+    return box(x0 + c0 * step, y0 + r0 * step, x0 + (c0 + ww) * step, y0 + (r0 + hh) * step)
+
+
+def band_rect(free, axis: str, a: float, b: float, px: float, py: float, follow: bool = False):
+    """Kasten zwischen zwei geraden Linien (axis 'h': waagrecht bei y = a und y = b). Quer dazu
+    reicht er vom Klickpunkt aus bis zum nächsten Hindernis (Werkzeug + Wand, Rand, anderer
+    Kasten). follow=False: gerades Rechteck; True: Wand folgt der Kontur des Hindernisses."""
+    lo, hi = min(a, b), max(a, b)
+    fx0, fy0, fx1, fy1 = free.bounds
+    big = 1e4
+    band = box(-big, lo, big, hi) if axis == "h" else box(lo, -big, hi, big)
+    region = band.intersection(free)
+    comps = _polys(region)
+    pt = Point(px, py)
+    comp = next((g for g in comps if g.buffer(0.3).contains(pt)), None)
+    if comp is None:
+        return None
+    if follow:
+        return comp
+    obst = band.intersection(box(fx0 - 1, fy0 - 1, fx1 + 1, fy1 + 1)).difference(free)
+    if axis == "h":
+        left = obst.intersection(box(-big, lo, px, hi))
+        right = obst.intersection(box(px, lo, big, hi))
+        x_a = left.bounds[2] if not left.is_empty else fx0
+        x_b = right.bounds[0] if not right.is_empty else fx1
+        return box(x_a, lo, x_b, hi) if x_b > x_a else None
+    below = obst.intersection(box(lo, -big, hi, py))
+    above = obst.intersection(box(lo, py, hi, big))
+    y_a = below.bounds[3] if not below.is_empty else fy0
+    y_b = above.bounds[1] if not above.is_empty else fy1
+    return box(lo, y_a, hi, y_b) if y_b > y_a else None

@@ -75,6 +75,7 @@ export interface InsertSpec {
   comp_min_size: number
   comp_wall: number
   comp_depth: number | null
+  comp_follow: boolean
   placements: Placement[]
   grip_recesses: GripRecess[]
   compartments: Compartment[]

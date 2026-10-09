@@ -116,6 +116,7 @@ class InsertSpec(BaseModel):
     comp_min_size: float = Field(20.0, ge=5, le=300)
     comp_wall: float = Field(1.6, ge=0.4, le=20)
     comp_depth: float | None = Field(None, ge=0, le=200)    # None = so tief wie möglich
+    comp_follow: bool = False          # Kastenwand folgt der Werkzeugkontur (sonst gerade Rechtecke)
     placements: Annotated[list[Placement], Field(max_length=12)] = []
     grip_recesses: Annotated[list[GripRecess], Field(max_length=40)] = []
     compartments: Annotated[list[Compartment], Field(max_length=60)] = []

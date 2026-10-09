@@ -61,6 +61,8 @@ export const api = {
     req<{ compartments: InsertSpec['compartments']; reason: string | null; grid: [number, number] }>(`/inserts/${spec.id}/auto-compartments`, json('POST', spec)),
   editCompartments: (spec: InsertSpec, op: 'merge' | 'split' | 'cut', indices: number[], parts = 2, cut?: { axis: 'h' | 'v'; at: number }) =>
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/edit`, json('POST', { spec, op, indices, parts, ...cut })),
+  compartmentBand: (spec: InsertSpec, axis: 'h' | 'v', a: number, b: number, x: number, y: number) =>
+    req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/band`, json('POST', { spec, axis, a, b, x, y })),
   compartmentRect: (spec: InsertSpec, x0: number, y0: number, x1: number, y1: number) =>
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/rect`, json('POST', { spec, x0, y0, x1, y1 })),
   compartmentAt: (spec: InsertSpec, x: number, y: number) =>

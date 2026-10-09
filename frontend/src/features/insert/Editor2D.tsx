@@ -5,7 +5,7 @@ import type { InsertSpec, LayoutOut, ObjectSpec, PolyOut } from '../../lib/types
 
 export type Sel = { kind: 'placement' | 'grip' | 'comp'; index: number } | null
 /** Zeichenwerkzeug: Kasten aufziehen oder gerader Schnitt durch einen Kasten */
-export type Tool = { kind: 'box' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number } | null
+export type Tool = { kind: 'box' } | { kind: 'band'; axis: 'h' | 'v' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number } | null
 
 const PAD = 28
 const INNER = 2.6
@@ -34,7 +34,7 @@ function centroid(p: PolyOut): [number, number] {
 
 /** Draufsicht der Einlage im mm-Maßstab. Positionen in der Spec gelten vor der automatischen
  *  Zentrierung; das Layout liefert die Verschiebung (shift) mit. */
-export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onPocketClick }: {
+export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onBand, onPocketClick }: {
   spec: InsertSpec; layout: LayoutOut | undefined; objects?: Record<string, ObjectSpec>
   sel: Sel; onSelect: (s: Sel, additive?: boolean) => void; selectedComps?: number[]
   tool?: Tool
@@ -42,6 +42,8 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   onBox?: (x0: number, y0: number, x1: number, y1: number) => void
   /** Schnitt-Werkzeug: Klickposition (Layout-mm) */
   onCut?: (x: number, y: number) => void
+  /** Linien-Werkzeug: zwei Linien (a, b) und der zweite Klickpunkt (Layout-mm) */
+  onBand?: (axis: 'h' | 'v', a: number, b: number, x: number, y: number) => void
   /** Klick in eine Tasche: Platzierung und Layout-Position (mm) */
   onPocketClick?: (pi: number, x: number, y: number) => void
   onMove: (s: NonNullable<Sel>, x: number, y: number) => void
@@ -49,6 +51,8 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   const tk = useTokens()
   const [drawA, setDrawA] = useState<[number, number] | null>(null)
   const [hoverP, setHoverP] = useState<[number, number] | null>(null)
+  const [bandA, setBandA] = useState<number | null>(null)
+  useEffect(() => { setBandA(null) }, [tool?.kind, tool && 'axis' in tool ? tool.axis : null])
   const wrap = useRef<HTMLDivElement>(null)
   const [w, setW] = useState(800)
   useEffect(() => {
@@ -169,15 +173,17 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
           {/* manuelle Fächer */}
           {layout && spec.compartments.map((c, ci) => {
             const ox = c.x + sx, oy = c.y + sy
-            const lc = manualComps[ci]
+            const lc = manualComps.length === spec.compartments.length ? manualComps[ci] : undefined
+            const own: PolyOut[] | null = c.polygon ? [{ exterior: c.polygon.map(([x, y]) => [x + sx, y + sy] as [number, number]), holes: [] }] : null
+            const polys = own ?? lc?.polygons ?? []
             const act = selectedComps.includes(ci) || (sel?.kind === 'comp' && sel.index === ci)
             return (
               <Group key={'c' + ci} x={px(ox)} y={py(oy)} draggable={!c.generated}
                 onMouseDown={(e) => onSelect({ kind: 'comp', index: ci }, e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey)}
                 onDragEnd={dragEnd({ kind: 'comp', index: ci })}>
-                <Polys polys={lc?.polygons ?? []} ox={ox} oy={oy} k={k} fill={alpha(tk.green, 0.3)}
+                <Polys polys={polys} ox={ox} oy={oy} k={k} fill={alpha(tk.green, 0.3)}
                   stroke={act ? tk.accent : tk.green} width={act ? 2.5 : 1.25} />
-                {lc?.polygons[0] && label(...centroid(lc.polygons[0]), lc.max_depth ? 'max' : lc.depth.toFixed(0), ox, oy)}
+                {polys[0] && label(...centroid(polys[0]), c.depth === null ? 'max' : lc ? lc.depth.toFixed(0) : c.depth.toFixed(0), ox, oy)}
               </Group>
             )
           })}
@@ -186,7 +192,9 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
               const pos = e.target.getStage()!.getPointerPosition()!
               return [Math.round(((pos.x - left) / k) * 2) / 2, Math.round((OY - (pos.y - PAD) / k) * 2) / 2]
             }
-            const cutComp = tool.kind === 'cut' ? layout?.compartments.filter((c) => !c.auto)[tool.comp]?.polygons[0] : undefined
+            const cc = tool.kind === 'cut' ? spec.compartments[tool.comp] : undefined
+            const cutComp = cc?.polygon ? { exterior: cc.polygon.map(([x, y]) => [x + sx, y + sy] as [number, number]) } : undefined
+            const IX0 = INNER, IX1 = OX - INNER, IY0 = INNER, IY1 = OY - INNER
             const cb = cutComp ? (() => {
               const xs = cutComp.exterior.map((q) => q[0]), ys = cutComp.exterior.map((q) => q[1])
               return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
@@ -198,11 +206,30 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
                     width={Math.abs(hoverP[0] - drawA[0]) * k} height={Math.abs(hoverP[1] - drawA[1]) * k}
                     stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} fill={alpha(tk.green, 0.12)} listening={false} />
                 )}
+                {tool.kind === 'band' && bandA !== null && hoverP && (tool.axis === 'h'
+                  ? <Rect x={px(IX0)} y={py(Math.max(bandA, hoverP[1]))} width={(IX1 - IX0) * k} height={Math.abs(hoverP[1] - bandA) * k}
+                      fill={alpha(tk.green, 0.14)} listening={false} />
+                  : <Rect x={px(Math.min(bandA, hoverP[0]))} y={py(IY1)} width={Math.abs(hoverP[0] - bandA) * k} height={(IY1 - IY0) * k}
+                      fill={alpha(tk.green, 0.14)} listening={false} />)}
+                {tool.kind === 'band' && bandA !== null && (tool.axis === 'h'
+                  ? <Line points={[px(IX0), py(bandA), px(IX1), py(bandA)]} stroke={tk.green} strokeWidth={2} listening={false} />
+                  : <Line points={[px(bandA), py(IY0), px(bandA), py(IY1)]} stroke={tk.green} strokeWidth={2} listening={false} />)}
+                {tool.kind === 'band' && hoverP && (tool.axis === 'h'
+                  ? <Line points={[px(IX0), py(hoverP[1]), px(IX1), py(hoverP[1])]} stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} listening={false} />
+                  : <Line points={[px(hoverP[0]), py(IY0), px(hoverP[0]), py(IY1)]} stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} listening={false} />)}
                 {cb && hoverP && (tool.kind === 'cut' && tool.axis === 'h'
                   ? <Line points={[px(cb[0] - 2), py(hoverP[1]), px(cb[2] + 2), py(hoverP[1])]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />
                   : <Line points={[px(hoverP[0]), py(cb[1] - 2), px(hoverP[0]), py(cb[3] + 2)]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />)}
                 <Rect x={0} y={0} width={w} height={h} fill="transparent"
-                  onMouseDown={(e) => { e.cancelBubble = true; const p = mm(e); if (tool.kind === 'box') { setDrawA(p); setHoverP(p) } else onCut?.(p[0], p[1]) }}
+                  onMouseDown={(e) => {
+                    e.cancelBubble = true; const p = mm(e)
+                    if (tool.kind === 'box') { setDrawA(p); setHoverP(p) }
+                    else if (tool.kind === 'band') {
+                      const v = tool.axis === 'h' ? p[1] : p[0]
+                      if (bandA === null) setBandA(v)
+                      else { onBand?.(tool.axis, bandA, v, p[0], p[1]); setBandA(null) }
+                    } else onCut?.(p[0], p[1])
+                  }}
                   onMouseMove={(e) => setHoverP(mm(e))}
                   onMouseLeave={() => setHoverP(null)}
                   onMouseUp={(e) => {

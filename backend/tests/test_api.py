@@ -106,7 +106,7 @@ def test_demo_object_and_insert_crud():
 
 
 def test_compartments_merge_split_and_reason():
-    from shapely.geometry import Polygon
+    from shapely.geometry import Polygon, box
     demo = client.post("/api/objects/demo").json()
     ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False,
                                             "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
@@ -120,8 +120,14 @@ def test_compartments_merge_split_and_reason():
     spec["compartments"] = sp["compartments"]
     P = [Polygon(c["polygon"]) for c in spec["compartments"]]
     i, j = next((i, j) for i in range(len(P)) for j in range(i + 1, len(P)) if P[i].distance(P[j]) < 3)
+    # gerade (Standard): ein Rechteck, mindestens so groß wie der größere Kasten
+    m0 = client.post(f"/api/inserts/{ins['id']}/compartments/edit",
+                     json={"spec": spec, "op": "merge", "indices": [i, j]}).json()
+    R = Polygon(m0["compartments"][-1]["polygon"])
+    assert R.area > 0.97 * box(*R.bounds).area and R.area >= max(P[i].area, P[j].area) * 0.97
+    # konturfolgend: Wand dazwischen fällt weg, nichts geht verloren
     m = client.post(f"/api/inserts/{ins['id']}/compartments/edit",
-                    json={"spec": spec, "op": "merge", "indices": [i, j]}).json()
+                    json={"spec": {**spec, "comp_follow": True}, "op": "merge", "indices": [i, j]}).json()
     assert Polygon(m["compartments"][-1]["polygon"]).area >= P[i].area + P[j].area
     spec["compartments"] = m["compartments"]
     assert not client.post(f"/api/inserts/{ins['id']}/layout", json=spec).json()["warnings"]
@@ -191,3 +197,26 @@ def test_compartment_rect_and_straight_cut():
                       json={"spec": ins, "op": "cut", "indices": [0], "axis": "h", "at": mid}).json()
     lo, hi = sorted((Polygon(q["polygon"]) for q in cut["compartments"]), key=lambda g: g.bounds[1])
     assert lo.bounds[3] == pytest.approx(mid - 0.8, abs=0.4) and hi.bounds[1] == pytest.approx(mid + 0.8, abs=0.4)
+
+
+def test_compartment_between_two_lines_is_straight():
+    from shapely.geometry import Polygon, box
+    demo = client.post("/api/objects/demo").json()
+    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False,
+                                            "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
+    lay = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
+    ox, oy = lay["outer"]
+    r = client.post(f"/api/inserts/{ins['id']}/compartments/band",
+                    json={"spec": ins, "axis": "h", "a": 20, "b": 70, "x": 8, "y": 40})
+    assert r.status_code == 200, r.text
+    P = Polygon(r.json()["compartments"][0]["polygon"])
+    sx, sy = lay["shift"]
+    # gerades Rechteck (nur Eckradien), zwischen den Linien, links bis zum Rand, rechts bis vor die Tasche
+    assert P.area > 0.97 * box(*P.bounds).area
+    assert P.bounds[1] == pytest.approx(20 - sy, abs=0.2) and P.bounds[3] == pytest.approx(70 - sy, abs=0.2)
+    ins["compartments"] = r.json()["compartments"]
+    lay2 = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
+    assert not lay2["warnings"]
+    pocket = Polygon(lay2["pieces"][0]["polygons"][0]["exterior"])
+    comp = Polygon(lay2["compartments"][0]["polygons"][0]["exterior"])
+    assert 1.5 <= comp.distance(pocket) <= 4.0 or comp.bounds[2] < pocket.bounds[0]

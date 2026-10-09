@@ -195,7 +195,18 @@ def edit_compartments(iid: str, body: CompEdit) -> dict:
         parts = [g for g in getattr(merged, "geoms", [merged]) if g.geom_type == "Polygon" and g.area > 50]
         if len(parts) != 1:
             raise HTTPException(422, "Diese Kästen liegen nicht nebeneinander und lassen sich nicht verbinden")
-        new = [as_comp(parts[0])]
+        if spec.comp_follow:
+            new = [as_comp(parts[0])]
+        else:
+            # gerade: größtes Rechteck im gemeinsamen Umriss (frei von Werkzeug und anderen Kästen)
+            from ..geometry.layout import largest_rect
+            bb = box(*unary_union(polys).bounds).intersection(free)
+            r = largest_rect(bb)
+            if r is None or r.area < 0.9 * max(p.area for p in polys):
+                r = largest_rect(parts[0])
+            if r is None:
+                raise HTTPException(422, "Kein gemeinsames Rechteck möglich")
+            new = [as_comp(r)]
     else:
         for p in polys:
             x0, y0, x1, y1 = p.bounds
@@ -253,6 +264,50 @@ def compartment_at(iid: str, body: CompAt) -> dict:
                     depth=round(spec.comp_depth, 1) if spec.comp_depth else None,
                     polygon=[[round(a, 2), round(b, 2)] for a, b in region.exterior.coords])
     return {"compartments": [c.model_dump() for c in spec.compartments] + [c.model_dump()]}
+
+
+class CompBand(BaseModel):
+    spec: InsertSpec
+    axis: Literal["h", "v"] = "h"                # h: zwei waagrechte Linien (y = a, y = b)
+    a: float = Field(ge=-2000, le=2000)          # Layout-Koordinaten (nach Zentrierung)
+    b: float = Field(ge=-2000, le=2000)
+    x: float = Field(ge=-2000, le=2000)          # Klickpunkt: auf welcher Seite des Werkzeugs
+    y: float = Field(ge=-2000, le=2000)
+
+
+@router.post("/{iid}/compartments/band")
+def compartment_band(iid: str, body: CompBand) -> dict:
+    """Kasten zwischen zwei geraden Linien: gerade Kanten an den Linien, quer dazu so weit, bis
+    Werkzeug, Mulde, Rand oder ein anderer Kasten kommt (gerade oder konturfolgend)."""
+    from ..geometry.layout import _polys, band_rect
+    from ..schemas import Compartment
+
+    spec = body.spec.model_copy(update={"id": iid})
+    layout_payload(spec)
+    free, _ = _free_area(spec, set())
+    lay = compute_layout(spec, storage.objects_for(spec))
+    sx, sy = lay.shift
+    if body.axis == "h":
+        a, b, px, py = body.a - sy, body.b - sy, body.x - sx, body.y - sy
+    else:
+        a, b, px, py = body.a - sx, body.b - sx, body.x - sx, body.y - sy
+    if abs(a - b) < 6:
+        raise HTTPException(422, "Die beiden Linien liegen zu dicht beieinander (mindestens 6 mm)")
+    g = band_rect(free, body.axis, a, b, px, py, spec.comp_follow)
+    if g is None or g.is_empty:
+        raise HTTPException(422, "Dort ist kein freier Platz für einen Kasten")
+    g = g.buffer(-2.0, join_style=1).buffer(2.0, join_style=1)
+    gs = _polys(g)
+    if not gs:
+        raise HTTPException(422, "Der Kasten wäre zu schmal")
+    g = max(gs, key=lambda q: q.area).simplify(0.05)
+    if min(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) < 6:
+        raise HTTPException(422, "Der Kasten wäre schmaler als 6 mm")
+    x0, y0, x1, y1 = g.bounds
+    c = Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, generated=True,
+                    depth=round(spec.comp_depth, 1) if spec.comp_depth else None,
+                    polygon=[[round(u, 2), round(v, 2)] for u, v in g.exterior.coords])
+    return {"compartments": [q.model_dump() for q in spec.compartments] + [c.model_dump()]}
 
 
 class CompRect(BaseModel):

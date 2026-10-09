@@ -15,7 +15,7 @@ from app.schemas import InsertSpec, Placement
 def ref():
     o = synthetic_pliers()
     spec = InsertSpec(grid_x=3, grid_y=5, placements=[Placement(object_id="pliers", x=0, y=0, rot_deg=90)],
-                      auto_compartments=True)
+                      auto_compartments=True, comp_follow=True)
     return spec, o, build_insert(spec, {"pliers": o})
 
 

@@ -197,8 +197,15 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   }, [sel, compSel])
   // Zeichenwerkzeuge: Kasten aufziehen (Klick ohne Ziehen = freie Fläche füllen), gerader Schnitt
   const [tool, setTool] = useState<Tool>(null)
-  const picking = tool?.kind === 'box'
-  const setPicking = (f: (v: boolean) => boolean) => setTool((t) => (f(t?.kind === 'box') ? { kind: 'box' } : null))
+  // Standard: Linien quer zum ersten Werkzeug (senkrecht liegendes Werkzeug -> waagrechte Linien)
+  const defAxis: 'h' | 'v' = spec.placements.length && Math.abs(Math.sin((spec.placements[0].rot_deg * Math.PI) / 180)) > 0.7 ? 'h' : 'v'
+  const picking = tool?.kind === 'band'
+  const setPicking = (f: (v: boolean) => boolean) => setTool((t) => (f(t?.kind === 'band') ? { kind: 'band', axis: defAxis } : null))
+  const compBand = useMutation({
+    mutationFn: (v: { axis: 'h' | 'v'; a: number; b: number; x: number; y: number }) => api.compartmentBand(spec, v.axis, v.a, v.b, v.x, v.y),
+    onSuccess: (r) => { patch({ compartments: r.compartments }); select({ kind: 'comp', index: r.compartments.length - 1 }) },
+  })
+  const onBand = (axis: 'h' | 'v', a: number, b: number, x: number, y: number) => compBand.mutate({ axis, a, b, x, y })
   const compAt = useMutation({
     mutationFn: (p: { x0: number; y0: number; x1: number; y1: number }) => p.x0 === p.x1 && p.y0 === p.y1
       ? api.compartmentAt(spec, p.x0, p.y0) : api.compartmentRect(spec, p.x0, p.y0, p.x1, p.y1),
@@ -290,7 +297,9 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             </div>
             <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}>
               <Plus size={14} /> Kasten zeichnen</button>
-            <div className="hint mt-0">Kästen anklicken: einzeln löschen (Entf), in Fächer teilen oder mit Shift-Klick mehrere verbinden.</div>
+            <Check label="Kastenwand folgt der Werkzeugkontur" checked={spec.comp_follow} onChange={(v) => patch({ comp_follow: v })} />
+            <div className="hint mt-0">Aus: alle Kästen sind gerade Rechtecke, die bis an das Werkzeug reichen. Kasten zeichnen: zwei Linien setzen, dazwischen entsteht der Kasten.
+              Kästen anklicken: löschen (Entf), gerade teilen oder mit Shift-Klick verbinden.</div>
             {compAt.isError && <Msg kind="err">{errText(compAt.error)}</Msg>}
             {genComps.isError && <Msg kind="err">{errText(genComps.error)}</Msg>}
             {compMsg && (
@@ -369,7 +378,8 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip} title="Greifmulde automatisch am Schwerpunkt setzen"><Plus size={14} /> Greifmulde</button>
             <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}
-              title="Rechteck aufziehen: gerade Kanten, am Werkzeug folgt die Wand der Kontur"><Plus size={14} /> Kasten</button>
+              title="Zwei gerade Linien setzen: dazwischen entsteht ein gerader Kasten bis an das Werkzeug"><Plus size={14} /> Kasten</button>
+
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
               <CrosshairSimple size={14} /> Mittig{spec.auto_center ? ' (aktiv)' : ''}
@@ -392,18 +402,27 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               <Msg kind="info">Noch kein Werkzeug in dieser Einlage. Oben über "Objekt hinzufügen" ein gescanntes Werkzeug wählen.</Msg>
             )}
             {compAt.isError && !tool && <Msg kind="err">{errText(compAt.error)}</Msg>}
+            {compBand.isError && <Msg kind="err">{errText(compBand.error)}</Msg>}
             {compCut.isError && !tool && <Msg kind="err">{errText(compCut.error)}</Msg>}
             <div className="panel p-2 relative">
               {layout.isFetching && <div className="absolute inset-x-2 top-1"><BusyBar /></div>}
               {tool && (
-                <div className="absolute left-3 right-3 bottom-3 z-10 pointer-events-none">
+                <div className="absolute left-3 right-3 bottom-3 z-10 pointer-events-none grid gap-2 justify-items-start">
+                  {tool.kind === 'band' && (
+                    <div className="pointer-events-auto panel p-1">
+                      <Segmented value={tool.axis} onChange={(a) => setTool({ kind: 'band', axis: a })}
+                        options={[{ value: 'h', label: 'Linien waagrecht' }, { value: 'v', label: 'Linien senkrecht' }]} />
+                    </div>
+                  )}
                   <Msg kind="info">{tool.kind === 'box'
-                    ? 'Rechteck aufziehen: gerade Kanten, wo du ziehst; am Werkzeug folgt die Wand der Kontur. Nur klicken füllt die freie Fläche dort. Esc bricht ab.'
-                    : `In den Kasten klicken: dort wird er ${tool.axis === 'h' ? 'waagrecht' : 'senkrecht'} gerade geteilt. Esc bricht ab.`}</Msg>
+                    ? 'Rechteck aufziehen. Esc bricht ab.'
+                    : tool.kind === 'band'
+                      ? 'Erste Linie setzen, dann zweite Linie auf der Seite, wo der Kasten hin soll. Dazwischen entsteht ein gerader Kasten bis an das Werkzeug. Weitere Kästen: einfach weiterklicken. Esc beendet.'
+                      : `In den Kasten klicken: dort wird er ${tool.axis === 'h' ? 'waagrecht' : 'senkrecht'} gerade geteilt. Esc bricht ab.`}</Msg>
                 </div>
               )}
               <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={select} onMove={move} selectedComps={compSel}
-                tool={tool} onBox={onBox} onCut={onCut}
+                tool={tool} onBox={onBox} onCut={onCut} onBand={onBand}
                 onPocketClick={(pi, x, y) => {
                   // Klickpunkt -> Position entlang der Werkzeugachse (objekt-lokal x)
                   const pl = spec.placements[pi]; const [sx0, sy0] = lay?.shift ?? [0, 0]
@@ -584,6 +603,13 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
     const upd = (q: Partial<GripRecess>) => setSpec((s) => ({ ...s, grip_recesses: s.grip_recesses.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
     const pl = g.attach != null ? spec.placements[g.attach] : undefined
     const L = pl ? objMap[pl.object_id]?.length_mm ?? 200 : 0
+    // tatsächliche Länge der Mulde (bei automatischer Länge aus dem Layout)
+    const lg = lay?.grips.filter((q) => !q.auto)[sel.index]?.polygons[0]
+    const curLen = lg && pl ? (() => {
+      const a = (pl.rot_deg * Math.PI) / 180, nx = -Math.sin(a), ny = Math.cos(a)
+      const t = lg.exterior.map(([x, y]) => x * nx + y * ny)
+      return Math.max(...t) - Math.min(...t)
+    })() : undefined
     if (pl) return (
       <div className="grid gap-2">
         <h3 className="sect">Greifmulde (am Werkzeug)</h3>
@@ -594,8 +620,10 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
         </label>
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="Position" value={g.s ?? 0} step={1} min={0} max={L} onChange={(v) => upd({ s: v })} />
-          <NumberField label="Breite" value={g.w} step={0.5} min={4} onChange={(v) => upd({ w: v })} />
-          {!g.auto_length && <NumberField label="Länge" value={g.l} step={1} min={4} onChange={(v) => upd({ l: v })} />}
+          <NumberField label="Breite" value={g.w} step={0.5} min={4} onChange={(v) => upd({ w: v })}
+            hint="entlang des Werkzeugs" />
+          <NumberField label="Länge" value={Math.round((curLen ?? g.l) * 10) / 10} step={1} min={4} onChange={(v) => upd({ l: v, auto_length: false })}
+            hint={g.auto_length !== false ? 'automatisch' : 'quer zum Werkzeug'} />
           <NumberField label="Tiefe unter Tasche" value={g.depth_below} step={1} min={0} onChange={(v) => upd({ depth_below: v })} />
           <NumberField label="Kantenradius" value={g.edge_r ?? 4} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
         </div>
