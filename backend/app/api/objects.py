@@ -289,6 +289,9 @@ async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_ho
     return _save_mask(spec, view, rect, mask, fill_holes)
 
 
+FIT_VERSION = 2
+
+
 def _level_ref(measured, reliable) -> float:
     """Höhe der Messung, die der tiefsten Ebene (z = 0) entspricht (wie in fit_levels gefiltert)."""
     from scipy.ndimage import median_filter
@@ -358,9 +361,14 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
     if g.profile.cut and not reliable.all():
         from scipy.ndimage import binary_dilation
         reliable &= ~binary_dilation(~reliable, iterations=int(round(15.0 / profile.DS)))   # Handreste
-    measured = np.asarray(g.profile.bottom, float)
+    # Neigung so, dass gerade Unterseiten waagrecht auf den Ebenen liegen (statt Tisch-Ruhelage)
+    k_tilt = profile.best_tilt(s_grid, g.profile.bottom, reliable)
+    measured = np.asarray(g.profile.bottom, float) + k_tilt * np.asarray(s_grid)
+    top_raw = np.asarray(g.profile.top, float) + k_tilt * np.asarray(s_grid)
     zp = _level_ref(measured, reliable)       # Bezug: tiefster (gefilterter) Messpunkt = 0
-    if body.levels:                           # Handkorrektur, im selben Bezug wie Messung/Oberseite
+    # Ebenen aus älterer Auswertung (andere Neigung) passen nicht mehr: dann neu erkennen
+    old = spec.profile is not None and spec.profile.fit_version < FIT_VERSION
+    if body.levels and not old:               # Handkorrektur, im selben Bezug wie Messung/Oberseite
         raw = profile.normalize_levels([[a, b, z] for a, b, z in body.levels], L, keep_ref=True)
         zp += min(q[2] for q in raw)          # tiefere Ebene = Werkzeug dort dicker: alles mitschieben
         lv = profile.normalize_levels(raw, L)
@@ -368,7 +376,7 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
         lv = profile.fit_levels(s_grid, measured, reliable, count=body.level_count)
     b_arr = profile.bottom_from_levels(s_grid, lv)
     meas = measured - zp
-    t_arr = profile.smooth_top(s_grid, np.asarray(g.profile.top) - zp, np.minimum(b_arr, meas))
+    t_arr = profile.smooth_top(s_grid, top_raw - zp, np.minimum(b_arr, meas))
     bottom, top = b_arr.tolist(), t_arr.tolist()
     for key, arr in (("bottom", bottom), ("top", top)):
         if key in ov:
@@ -378,9 +386,9 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
     spec.contour_mm = g.contour.round(3).tolist()
     spec.length_mm, spec.width_mm = round(g.length, 2), round(g.width, 2)
     spec.profile = Profile(ds=0.5, s=g.profile.s.round(3).tolist(), bottom=bottom, top=top,
-                           levels=lv, measured=np.round(meas, 2).tolist())
+                           levels=lv, measured=np.round(meas, 2).tolist(), fit_version=FIT_VERSION)
     spec.flip_lr_used = g.profile.flip_lr
-    spec.tilt_deg = round(g.profile.tilt_deg, 2)
+    spec.tilt_deg = round(g.profile.tilt_deg + float(np.degrees(np.arctan(k_tilt))), 2)
     spec.warnings = g.warnings
     spec.profile_missing = g.profile.missing.tolist()
     storage.save_object(spec)

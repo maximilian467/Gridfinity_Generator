@@ -7,7 +7,7 @@ import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec 
 import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
 import { arrange, placeNew } from '../../lib/placement'
 import { Editor2D } from './Editor2D'
-import type { Sel } from './Editor2D'
+import type { Sel, Tool } from './Editor2D'
 
 const Preview3D = lazy(() => import('./Preview3D').then((m) => ({ default: m.Preview3D })))
 
@@ -195,19 +195,32 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [sel, compSel])
-  // einzelner Kasten: Klick in eine freie Fläche, Form nach denselben Vorgaben wie 'Kästen erzeugen'
-  const [picking, setPicking] = useState(false)
+  // Zeichenwerkzeuge: Kasten aufziehen (Klick ohne Ziehen = freie Fläche füllen), gerader Schnitt
+  const [tool, setTool] = useState<Tool>(null)
+  const picking = tool?.kind === 'box'
+  const setPicking = (f: (v: boolean) => boolean) => setTool((t) => (f(t?.kind === 'box') ? { kind: 'box' } : null))
   const compAt = useMutation({
-    mutationFn: (p: { x: number; y: number }) => api.compartmentAt(spec, p.x, p.y),
+    mutationFn: (p: { x0: number; y0: number; x1: number; y1: number }) => p.x0 === p.x1 && p.y0 === p.y1
+      ? api.compartmentAt(spec, p.x0, p.y0) : api.compartmentRect(spec, p.x0, p.y0, p.x1, p.y1),
     onSuccess: (r) => { patch({ compartments: r.compartments }); select({ kind: 'comp', index: r.compartments.length - 1 }) },
   })
-  const onPick = (x: number, y: number) => { setPicking(false); compAt.mutate({ x, y }) }
+  const compCut = useMutation({
+    mutationFn: (v: { comp: number; axis: 'h' | 'v'; at: number }) => api.editCompartments(spec, 'cut', [v.comp], 2, { axis: v.axis, at: v.at }),
+    onSuccess: (r) => { patch({ compartments: r.compartments }); select(null) },
+  })
+  const onBox = (x0: number, y0: number, x1: number, y1: number) => { setTool(null); compAt.mutate({ x0, y0, x1, y1 }) }
+  const onCut = (x: number, y: number) => {
+    if (tool?.kind !== 'cut') return
+    const [sx0, sy0] = lay?.shift ?? [0, 0]
+    setTool(null)
+    compCut.mutate({ comp: tool.comp, axis: tool.axis, at: tool.axis === 'h' ? y - sy0 : x - sx0 })
+  }
   useEffect(() => {
-    if (!picking) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPicking(false) }
+    if (!tool) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setTool(null) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [picking])
+  }, [tool])
 
   const lay = layout.data
   const warnings = lay?.warnings ?? []
@@ -276,7 +289,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               {nGenerated > 0 && <button className="btn btn-sm" onClick={clearComps}><Trash size={14} /> Alle {nGenerated} entfernen</button>}
             </div>
             <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}>
-              <Plus size={14} /> {picking ? 'In freie Fläche klicken …' : 'Einzelnen Kasten einfügen'}</button>
+              <Plus size={14} /> Kasten zeichnen</button>
             <div className="hint mt-0">Kästen anklicken: einzeln löschen (Entf), in Fächer teilen oder mit Shift-Klick mehrere verbinden.</div>
             {compAt.isError && <Msg kind="err">{errText(compAt.error)}</Msg>}
             {genComps.isError && <Msg kind="err">{errText(genComps.error)}</Msg>}
@@ -356,7 +369,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip} title="Greifmulde automatisch am Schwerpunkt setzen"><Plus size={14} /> Greifmulde</button>
             <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}
-              title="Danach in eine freie Fläche klicken: dort entsteht ein Kasten, dessen Wand der Kontur folgt"><Plus size={14} /> Kasten</button>
+              title="Rechteck aufziehen: gerade Kanten, am Werkzeug folgt die Wand der Kontur"><Plus size={14} /> Kasten</button>
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
               <CrosshairSimple size={14} /> Mittig{spec.auto_center ? ' (aktiv)' : ''}
@@ -378,12 +391,19 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             {spec.placements.length === 0 && usable.length > 0 && (
               <Msg kind="info">Noch kein Werkzeug in dieser Einlage. Oben über "Objekt hinzufügen" ein gescanntes Werkzeug wählen.</Msg>
             )}
-            {picking && <Msg kind="info">In eine freie Fläche klicken: dort entsteht ein Kasten, dessen Wand der Werkzeugkontur folgt. Esc bricht ab.</Msg>}
-            {compAt.isError && !picking && <Msg kind="err">{errText(compAt.error)}</Msg>}
+            {compAt.isError && !tool && <Msg kind="err">{errText(compAt.error)}</Msg>}
+            {compCut.isError && !tool && <Msg kind="err">{errText(compCut.error)}</Msg>}
             <div className="panel p-2 relative">
               {layout.isFetching && <div className="absolute inset-x-2 top-1"><BusyBar /></div>}
+              {tool && (
+                <div className="absolute left-3 right-3 bottom-3 z-10 pointer-events-none">
+                  <Msg kind="info">{tool.kind === 'box'
+                    ? 'Rechteck aufziehen: gerade Kanten, wo du ziehst; am Werkzeug folgt die Wand der Kontur. Nur klicken füllt die freie Fläche dort. Esc bricht ab.'
+                    : `In den Kasten klicken: dort wird er ${tool.axis === 'h' ? 'waagrecht' : 'senkrecht'} gerade geteilt. Esc bricht ab.`}</Msg>
+                </div>
+              )}
               <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={select} onMove={move} selectedComps={compSel}
-                onPick={picking ? onPick : undefined}
+                tool={tool} onBox={onBox} onCut={onCut}
                 onPocketClick={(pi, x, y) => {
                   // Klickpunkt -> Position entlang der Werkzeugachse (objekt-lokal x)
                   const pl = spec.placements[pi]; const [sx0, sy0] = lay?.shift ?? [0, 0]
@@ -441,6 +461,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
       {/* Rechts */}
       <aside className="panel p-3 grid gap-4 content-start overflow-y-auto" style={{ borderRadius: 0, borderWidth: '0 0 0 1px', maxHeight: 'calc(100dvh - 56px)' }}>
         <SelectionPanel spec={spec} lay={lay} sel={sel} setSpec={setSpec} onSel={select} objMap={objMap} pocketPt={pocketPt}
+          onCutTool={(axis) => sel?.kind === 'comp' && setTool({ kind: 'cut', axis, comp: sel.index })} cutAxis={tool?.kind === 'cut' ? tool.axis : null}
           compSel={compSel} onMerge={() => editComps.mutate({ op: 'merge' })} onSplit={(n) => editComps.mutate({ op: 'split', parts: n })}
           compBusy={editComps.isPending} compErr={editComps.isError ? errText(editComps.error) : null}  />
 
@@ -499,9 +520,10 @@ function Checks({ job }: { job: NonNullable<ReturnType<typeof useQuery<import('.
   )
 }
 
-function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMerge, onSplit, compBusy, compErr, pocketPt }: {
+function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMerge, onSplit, compBusy, compErr, pocketPt, onCutTool, cutAxis }: {
   spec: InsertSpec; lay: LayoutOut | undefined; sel: Sel; setSpec: (f: (s: InsertSpec) => InsertSpec) => void; onSel: (s: Sel) => void
   pocketPt: { pi: number; s: number } | null
+  onCutTool: (axis: 'h' | 'v') => void; cutAxis: 'h' | 'v' | null
   objMap: Record<string, ObjectSpec>; compSel: number[]; onMerge: () => void; onSplit: (n: number) => void
   compBusy: boolean; compErr: string | null
 }) {
@@ -615,6 +637,11 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
       <Check label="So tief wie möglich" checked={c.depth === null} onChange={(v) => upd({ depth: v ? null : Math.round(maxDepth ?? 15) })} />
       {c.depth !== null && <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />}
       {c.depth === null && maxDepth !== null && <div className="num hint mt-0">derzeit {maxDepth.toFixed(1)} mm (folgt der Einlagenhöhe)</div>}
+      <div className="text-sm font-medium mt-1">Gerade teilen an einer Stelle</div>
+      <div className="flex gap-2">
+        <button className={`btn btn-sm ${cutAxis === 'h' ? 'btn-on' : ''}`} onClick={() => onCutTool('h')}>Waagrechter Schnitt</button>
+        <button className={`btn btn-sm ${cutAxis === 'v' ? 'btn-on' : ''}`} onClick={() => onCutTool('v')}>Senkrechter Schnitt</button>
+      </div>
       <div className="text-sm font-medium mt-1">Teilen in gleich große Fächer</div>
       <div className="flex gap-2">
         {[2, 3, 4].map((n) => <button key={n} className="btn btn-sm" onClick={() => onSplit(n)} disabled={compBusy}>{n} Fächer</button>)}

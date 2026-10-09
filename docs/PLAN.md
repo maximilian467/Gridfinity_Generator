@@ -172,6 +172,9 @@ InsertSpec
 > - **Taschenboden als Ebenen** statt Stufen aus dem Höhenprofil: `profile.fit_levels` legt 1–5 waagrechte Ebenen so, dass jede auf dem tiefsten Punkt ihres Abschnitts liegt (Werkzeug liegt überall auf, kein Wippen); Abschnittsgrenzen minimieren die Luft unter dem Werkzeug. Verdeckte Stellen (Hand + 15 mm) zählen nicht. Ebenen sind von Hand editierbar (`PUT /objects/{id}/levels`, gleicher Bezug wie Messung/Oberseite).
 > - Werkzeug sinkt standardmäßig nur zu 65 % seiner Dicke ein (`InsertSpec.sink`); feste Gesamthöhe `height_mm` (inkl. Stapelrand 3,8 mm) setzt das Werkzeug bei Bedarf flacher ein.
 > - Greifmulde: ovaler Querschnitt mit gerundeter Oberkante, als ein Loft-Körper (Rotationskörper waren nicht wasserdicht).
+> - Neigung des Seitenprofils nicht als Tisch-Ruhelage (Hüllkurve), sondern so, dass die Unterseite am besten auf wenigen Ebenen aufliegt (`profile.best_tilt`): sonst kippt z. B. eine Zange auf Griffschutz + Griffende und der gerade Griff wirkt schräg.
+> - Taschenkontur: `smooth_hull` (Gauß-Glättung + lokales Aufweiten, wo das Original heraussteht) statt Schließen: ruhige Linie ohne Wellen, enthält Werkzeug + Spiel garantiert.
+> - Kästen zusätzlich als aufgezogenes Rechteck (gerade Kanten, am Werkzeug konturfolgend) und gerader Schnitt (waagrecht/senkrecht) an einer Klickstelle.
 
 ### D. Kontur (`vision/contour.py`)
 - Größte Außenkontur, **Löcher füllen** (Default an, z. B. Lücke zwischen Zangengriffen), Douglas-Peucker 0.1 mm, `shapely.make_valid`.

@@ -4,6 +4,8 @@ import { alpha, useTokens } from '../../lib/theme'
 import type { InsertSpec, LayoutOut, ObjectSpec, PolyOut } from '../../lib/types'
 
 export type Sel = { kind: 'placement' | 'grip' | 'comp'; index: number } | null
+/** Zeichenwerkzeug: Kasten aufziehen oder gerader Schnitt durch einen Kasten */
+export type Tool = { kind: 'box' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number } | null
 
 const PAD = 28
 const INNER = 2.6
@@ -32,16 +34,21 @@ function centroid(p: PolyOut): [number, number] {
 
 /** Draufsicht der Einlage im mm-Maßstab. Positionen in der Spec gelten vor der automatischen
  *  Zentrierung; das Layout liefert die Verschiebung (shift) mit. */
-export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], onPick, onPocketClick }: {
+export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onPocketClick }: {
   spec: InsertSpec; layout: LayoutOut | undefined; objects?: Record<string, ObjectSpec>
   sel: Sel; onSelect: (s: Sel, additive?: boolean) => void; selectedComps?: number[]
-  /** gesetzt: nächster Klick liefert die Layout-Position (mm) statt etwas auszuwählen */
-  onPick?: (x: number, y: number) => void
+  tool?: Tool
+  /** Kasten-Werkzeug: aufgezogenes Rechteck (Layout-mm); ohne Ziehen x0 = x1, y0 = y1 */
+  onBox?: (x0: number, y0: number, x1: number, y1: number) => void
+  /** Schnitt-Werkzeug: Klickposition (Layout-mm) */
+  onCut?: (x: number, y: number) => void
   /** Klick in eine Tasche: Platzierung und Layout-Position (mm) */
   onPocketClick?: (pi: number, x: number, y: number) => void
   onMove: (s: NonNullable<Sel>, x: number, y: number) => void
 }) {
   const tk = useTokens()
+  const [drawA, setDrawA] = useState<[number, number] | null>(null)
+  const [hoverP, setHoverP] = useState<[number, number] | null>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const [w, setW] = useState(800)
   useEffect(() => {
@@ -79,7 +86,7 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   const cellLine = (i: number, n: number) => i * 42 - (i === 0 ? 0 : i === n ? 0.5 : 0.25)
 
   return (
-    <div ref={wrap} className="w-full" style={{ cursor: onPick ? 'crosshair' : undefined }}>
+    <div ref={wrap} className="w-full" style={{ cursor: tool ? 'crosshair' : undefined }}>
       <Stage width={w} height={h} onMouseDown={(e) => e.target === e.target.getStage() && onSelect(null)}>
         <Layer>
           <Rect x={px(0)} y={py(OY)} width={OX * k} height={OY * k} stroke={tk['line-2']} strokeWidth={2} cornerRadius={3.75 * k}
@@ -174,14 +181,39 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
               </Group>
             )
           })}
-          {onPick && (
-            <Rect x={0} y={0} width={w} height={h} fill="transparent"
-              onMouseDown={(e) => {
-                e.cancelBubble = true
-                const pos = e.target.getStage()!.getPointerPosition()!
-                onPick(Math.round(((pos.x - left) / k) * 10) / 10, Math.round((OY - (pos.y - PAD) / k) * 10) / 10)
-              }} />
-          )}
+          {tool && (() => {
+            const mm = (e: any): [number, number] => {
+              const pos = e.target.getStage()!.getPointerPosition()!
+              return [Math.round(((pos.x - left) / k) * 2) / 2, Math.round((OY - (pos.y - PAD) / k) * 2) / 2]
+            }
+            const cutComp = tool.kind === 'cut' ? layout?.compartments.filter((c) => !c.auto)[tool.comp]?.polygons[0] : undefined
+            const cb = cutComp ? (() => {
+              const xs = cutComp.exterior.map((q) => q[0]), ys = cutComp.exterior.map((q) => q[1])
+              return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
+            })() : null
+            return (
+              <>
+                {tool.kind === 'box' && drawA && hoverP && (
+                  <Rect x={px(Math.min(drawA[0], hoverP[0]))} y={py(Math.max(drawA[1], hoverP[1]))}
+                    width={Math.abs(hoverP[0] - drawA[0]) * k} height={Math.abs(hoverP[1] - drawA[1]) * k}
+                    stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} fill={alpha(tk.green, 0.12)} listening={false} />
+                )}
+                {cb && hoverP && (tool.kind === 'cut' && tool.axis === 'h'
+                  ? <Line points={[px(cb[0] - 2), py(hoverP[1]), px(cb[2] + 2), py(hoverP[1])]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />
+                  : <Line points={[px(hoverP[0]), py(cb[1] - 2), px(hoverP[0]), py(cb[3] + 2)]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />)}
+                <Rect x={0} y={0} width={w} height={h} fill="transparent"
+                  onMouseDown={(e) => { e.cancelBubble = true; const p = mm(e); if (tool.kind === 'box') { setDrawA(p); setHoverP(p) } else onCut?.(p[0], p[1]) }}
+                  onMouseMove={(e) => setHoverP(mm(e))}
+                  onMouseLeave={() => setHoverP(null)}
+                  onMouseUp={(e) => {
+                    if (tool.kind !== 'box' || !drawA) return
+                    const p = mm(e); setDrawA(null)
+                    const small = Math.abs(p[0] - drawA[0]) < 3 && Math.abs(p[1] - drawA[1]) < 3
+                    onBox?.(drawA[0], drawA[1], small ? drawA[0] : p[0], small ? drawA[1] : p[1])
+                  }} />
+              </>
+            )
+          })()}
         </Layer>
       </Stage>
     </div>

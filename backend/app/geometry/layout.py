@@ -89,33 +89,49 @@ def _polys(g) -> list[Polygon]:
     return [p for p in getattr(g, "geoms", []) if isinstance(p, Polygon)]
 
 
-def _chaikin(ring: np.ndarray, n: int) -> np.ndarray:
-    for _ in range(n):
-        a, b = ring, np.roll(ring, -1, axis=0)
-        ring = np.empty((2 * len(a), 2))
-        ring[0::2], ring[1::2] = 0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b
-    return ring
+def smooth_hull(poly, sigma: float, step: float = 0.5):
+    """Glatte Hülle: Kontur gleichmäßig abtasten, mit Gauß (sigma mm) glätten und dort, wo die
+    Original-Kontur noch heraussteht, lokal und weich nach außen schieben. Ergebnis: ruhige
+    Linie ohne Wellen und Zacken, die das Original vollständig enthält (etwas mehr Spiel an
+    Wellenbergen und spitzen Enden, sonst keins)."""
+    from scipy.ndimage import gaussian_filter1d, maximum_filter1d
+    from shapely.geometry.polygon import orient
 
-
-def smooth_outline(poly, smooth: float):
-    """Kontur als ruhige, glatte Linie: Kerben schließen, auf wenige Stützpunkte reduzieren,
-    Ecken als Kurve ausrunden (Chaikin). Danach so weit aufweiten, dass die Original-Kontur
-    vollständig innen liegt: die Tasche wird nie kleiner als nötig."""
-    import shapely
-
-    if smooth <= 0:
+    if sigma <= 0:
         return poly
-    # Schließen = Kugel rollt von außen um die Kontur: Kerben und Zacken werden überbrückt
-    closed = poly.buffer(smooth, join_style=1).buffer(-smooth, join_style=1)
-    parts = _polys(closed)
+    parts = _polys(poly)
     if not parts:
         return poly
-    p = shapely.segmentize(max(parts, key=lambda q: q.area).simplify(0.05), 1.0)
-    ring = np.asarray(p.exterior.coords)[:-1]
-    if len(ring) < 4:
+    p = orient(max(parts, key=lambda q: q.area), 1.0)           # gegen den Uhrzeigersinn
+    ring = p.exterior
+    n = max(int(ring.length / step), 16)
+    P = np.array([ring.interpolate(i * ring.length / n).coords[0] for i in range(n)])
+    k = sigma / (ring.length / n)
+    S = gaussian_filter1d(P, k, axis=0, mode="wrap")
+    t = np.roll(S, -1, axis=0) - np.roll(S, 1, axis=0)
+    nrm = np.column_stack([t[:, 1], -t[:, 0]])
+    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12
+    e = np.einsum("ij,ij->i", P - S, nrm)                      # > 0: Original steht außen über
+    w = int(k) * 2 + 1
+    d = gaussian_filter1d(maximum_filter1d(np.maximum(e, 0), w, mode="wrap"), k / 3, mode="wrap")
+    Q = Polygon(S + d[:, None] * nrm).buffer(0)
+    qs = _polys(Q)
+    if not qs:
         return poly
-    sm = Polygon(_chaikin(ring, 2)).buffer(0)          # Facetten der Kreisbögen weich ausrunden
-    return sm.union(poly) if not sm.contains(poly) else sm
+    Q = orient(max(qs, key=lambda q: q.area), 1.0)
+    # zweiter, leichter Durchgang: letzte Knicke aus dem Aufweiten verschwinden
+    r2 = Q.exterior
+    m = max(int(r2.length / step), 16)
+    R = np.array([r2.interpolate(i * r2.length / m).coords[0] for i in range(m)])
+    R = gaussian_filter1d(R, k / 4, axis=0, mode="wrap")
+    q2 = _polys(Polygon(R).buffer(0))
+    if q2:
+        Q = max(q2, key=lambda q: q.area)
+    rest = poly.difference(Q)
+    if not rest.is_empty and rest.area > 1e-6:                 # letzte Reste: minimal aufweiten
+        r = max(Q.exterior.distance(Point(c)) for g in _polys(rest) for c in g.exterior.coords)
+        Q = Q.buffer(r + 0.02, join_style=1)
+    return Q
 
 
 def pocket_outline(contour: list[list[float]], cxy: float, cend: float, smooth: float = 0.0):
@@ -126,7 +142,7 @@ def pocket_outline(contour: list[list[float]], cxy: float, cend: float, smooth: 
     n = 9 if cend > 0 else 1
     shifts = [-cend + 2 * cend * i / (n - 1) for i in range(n)] if n > 1 else [0.0]
     o = unary_union([affinity.translate(b, dx, 0) for dx in shifts]).simplify(0.05)
-    return smooth_outline(o, smooth).simplify(0.03)
+    return smooth_hull(o, smooth).simplify(0.03)
 
 
 def _stadium_axis(g: GripRecess) -> LineString:
@@ -379,7 +395,9 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
 
 # ---- Automatische Kästen ------------------------------------------------------------
 
-def _max_rect(free: np.ndarray):
+def _max_rect(free: np.ndarray, min_h: int = 1, min_w: int = 1):
+    """Größtes Rechteck aus True-Zellen mit Mindestmaßen (sonst gewinnt ein langer, zu schmaler
+    Streifen und daneben bliebe Platz ungenutzt)."""
     best, best_area = None, 0
     h = np.zeros(free.shape[1], int)
     for r in range(free.shape[0]):
@@ -390,7 +408,7 @@ def _max_rect(free: np.ndarray):
             start = c
             while stack and stack[-1][1] >= cur:
                 s, hh = stack.pop()
-                if hh * (c - s) > best_area:
+                if hh * (c - s) > best_area and hh >= min_h and c - s >= min_w:
                     best_area, best = hh * (c - s), (r - hh + 1, s, hh, c - s)
                 start = s
             stack.append((start, cur))
@@ -416,7 +434,8 @@ def auto_compartments(lay: Layout, spec: InsertSpec, max_n: int = 10, grow: floa
         if remaining.is_empty:
             break
         mask = contains_xy(remaining.buffer(-0.5), gx.ravel(), gy.ravel()).reshape(gx.shape)
-        r = _max_rect(mask)
+        m = int(math.ceil(spec.comp_min_size))
+        r = _max_rect(mask, m, m)
         if r is None:
             break
         r0, c0, hh, ww = r
@@ -461,3 +480,4 @@ def _check(lay: Layout, spec: InsertSpec) -> None:
 
 __all__ = ["Layout", "Piece", "Grip", "Comp", "compute_layout", "pocket_outline", "grip_polygon",
            "comp_polygon", "auto_compartments", "balance_point", "MultiPolygon"]
+

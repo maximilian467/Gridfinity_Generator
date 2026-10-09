@@ -121,9 +121,11 @@ def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
 
 class CompEdit(BaseModel):
     spec: InsertSpec
-    op: Literal["merge", "split"]
+    op: Literal["merge", "split", "cut"]
     indices: list[int] = Field(min_length=1, max_length=60)
     parts: int = Field(2, ge=2, le=4)
+    axis: Literal["h", "v"] = "h"               # cut: h = waagrechter Schnitt (entlang x), v = senkrecht
+    at: float = Field(0.0, ge=-2000, le=2000)    # cut: Lage des Schnitts (Spec-Koordinaten)
 
 
 def _free_area(spec: InsertSpec, keep_idx: set[int]):
@@ -151,6 +153,27 @@ def edit_compartments(iid: str, body: CompEdit) -> dict:
 
     spec = body.spec.model_copy(update={"id": iid})
     idx = sorted({i for i in body.indices if 0 <= i < len(spec.compartments)})
+    if body.op == "cut" and idx:
+        p = comp_polygon(spec.compartments[idx[0]])
+        x0, y0, x1, y1 = p.bounds
+        h = max(spec.comp_wall, 0.8) / 2
+        band = (box(x0 - 1, body.at - h, x1 + 1, body.at + h) if body.axis == "h"
+                else box(body.at - h, y0 - 1, body.at + h, y1 + 1))
+        rest = p.difference(band)
+        pieces = [g for g in getattr(rest, "geoms", [rest]) if g.geom_type == "Polygon" and g.area > 20]
+        if len(pieces) < 2:
+            raise HTTPException(422, "Der Schnitt muss durch den Kasten gehen")
+        if any(min(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) < 6 for g in pieces):
+            raise HTTPException(422, "Ein Fach würde schmaler als 6 mm")
+        c0 = spec.compartments[idx[0]]
+
+        def piece(g):
+            g = g.buffer(-1.0, join_style=1).buffer(1.0, join_style=1).simplify(0.1)
+            bx0, by0, bx1, by1 = g.bounds
+            return Compartment(x=bx0, y=by0, w=bx1 - bx0, l=by1 - by0, depth=c0.depth, generated=True,
+                               polygon=[[round(a, 2), round(b, 2)] for a, b in g.exterior.coords])
+        keep = [c for i, c in enumerate(spec.compartments) if i != idx[0]]
+        return {"compartments": [c.model_dump() for c in keep] + [piece(g).model_dump() for g in pieces]}
     if not idx or (body.op == "merge" and len(idx) < 2):
         raise HTTPException(422, "Zum Verbinden mindestens zwei Kästen auswählen")
     polys = [comp_polygon(spec.compartments[i]) for i in idx]
@@ -230,6 +253,49 @@ def compartment_at(iid: str, body: CompAt) -> dict:
                     depth=round(spec.comp_depth, 1) if spec.comp_depth else None,
                     polygon=[[round(a, 2), round(b, 2)] for a, b in region.exterior.coords])
     return {"compartments": [c.model_dump() for c in spec.compartments] + [c.model_dump()]}
+
+
+class CompRect(BaseModel):
+    spec: InsertSpec
+    x0: float = Field(ge=-2000, le=2000)        # aufgezogenes Rechteck im Layout (nach Zentrierung)
+    y0: float = Field(ge=-2000, le=2000)
+    x1: float = Field(ge=-2000, le=2000)
+    y1: float = Field(ge=-2000, le=2000)
+
+
+@router.post("/{iid}/compartments/rect")
+def compartment_rect(iid: str, body: CompRect) -> dict:
+    """Kasten aus einem aufgezogenen Rechteck: gerade Kanten, wo gezeichnet wurde; wo das
+    Rechteck in Werkzeug, Mulde, Rand oder andere Kästen ragt, folgt die Wand deren Kontur."""
+    from shapely import affinity
+    from shapely.geometry import box
+
+    from ..geometry.layout import _polys
+    from ..schemas import Compartment
+
+    spec = body.spec.model_copy(update={"id": iid})
+    layout_payload(spec)
+    free, _ = _free_area(spec, set())                      # Spec-Koordinaten
+    lay = compute_layout(spec, storage.objects_for(spec))
+    r = affinity.translate(box(min(body.x0, body.x1), min(body.y0, body.y1), max(body.x0, body.x1),
+                               max(body.y0, body.y1)), -lay.shift[0], -lay.shift[1])
+    region = r.intersection(free)
+    parts = [g for g in _polys(region) if g.area > 30]
+    if not parts:
+        raise HTTPException(422, "In diesem Rechteck ist kein freier Platz")
+    g = max(parts, key=lambda q: q.area)
+    g = g.buffer(-1.5, join_style=1).buffer(1.5, join_style=1)    # Ecken leicht runden, Splitter weg
+    gs = _polys(g)
+    if not gs:
+        raise HTTPException(422, "Das Rechteck ist zu schmal für einen Kasten")
+    g = max(gs, key=lambda q: q.area).simplify(0.1)
+    if min(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) < 6:
+        raise HTTPException(422, "Der Kasten wäre schmaler als 6 mm")
+    x0, y0, x1, y1 = g.bounds
+    c = Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, generated=True,
+                    depth=round(spec.comp_depth, 1) if spec.comp_depth else None,
+                    polygon=[[round(a, 2), round(b, 2)] for a, b in g.exterior.coords])
+    return {"compartments": [q.model_dump() for q in spec.compartments] + [c.model_dump()]}
 
 
 @router.post("/{iid}/build")

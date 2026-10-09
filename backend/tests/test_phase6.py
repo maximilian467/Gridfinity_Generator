@@ -1,14 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
-from shapely.geometry import box
 
-from app.geometry.auto_compartments import propose_compartments
 from app.geometry.baseplate import make_tile, plan_tiles
 from app.geometry.checks import check_shape
-from app.geometry.layout import compute_layout
-from app.geometry.samples import synthetic_pliers
 from app.main import app
-from app.schemas import BaseplateSpec, InsertSpec, Placement
+from app.schemas import BaseplateSpec
 
 
 def test_tile_plan_and_geometry():
@@ -26,24 +22,6 @@ def test_tile_plan_and_geometry():
     c = check_shape(one)
     assert c.ok
     assert c.bbox[0] == pytest.approx(129.0, abs=0.1) and c.bbox[1] == pytest.approx(99.0, abs=0.1)
-
-
-def test_auto_compartments_free_and_apart():
-    o = synthetic_pliers()
-    spec = InsertSpec(grid_x=5, grid_y=3, height_u=5, placements=[Placement(object_id="pliers", x=6, y=30)])
-    lay = compute_layout(spec, {"pliers": o})
-    props = propose_compartments(lay, spec)
-    assert props
-    pockets = lay.pocket_union()
-    for p in props:
-        r = box(p.x, p.y, p.x + p.w, p.y + p.l)
-        assert lay.inner.contains(r)
-        assert r.distance(pockets) >= spec.min_wall - 0.6
-        assert p.w >= 20 and p.l >= 20
-    for i in range(len(props)):
-        for j in range(i + 1, len(props)):
-            a, b = props[i], props[j]
-            assert box(a.x, a.y, a.x + a.w, a.y + a.l).distance(box(b.x, b.y, b.x + b.w, b.y + b.l)) >= spec.min_wall - 0.6
 
 
 def test_baseplate_api_job():

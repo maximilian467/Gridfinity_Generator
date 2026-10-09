@@ -165,3 +165,29 @@ def test_set_levels_keeps_reference():
     assert [q[2] for i, q in enumerate(o["profile"]["levels"]) if i != gi] == pytest.approx(
         [q[2] + 2 for i, q in enumerate(lv) if i != gi])
     assert max(o["profile"]["top"]) == pytest.approx(T + 2, abs=0.01)
+
+
+def test_compartment_rect_and_straight_cut():
+    from shapely.geometry import Polygon, box
+    demo = client.post("/api/objects/demo").json()
+    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False,
+                                            "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
+    lay = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
+    ox, oy = lay["outer"]
+    # Rechteck vom Rand bis über die Tasche hinaus: gerade Kanten außen, Wand folgt der Tasche
+    r = client.post(f"/api/inserts/{ins['id']}/compartments/rect",
+                    json={"spec": ins, "x0": 4, "y0": 10, "x1": ox / 2, "y1": 60})
+    assert r.status_code == 200, r.text
+    c = r.json()["compartments"][0]
+    P = Polygon(c["polygon"])
+    sx, sy = lay["shift"]
+    assert P.bounds[1] == pytest.approx(10 - sy, abs=0.3) and P.bounds[3] == pytest.approx(60 - sy, abs=0.3)
+    assert P.area > 0.9 * box(*P.bounds).area * 0.5
+    ins["compartments"] = r.json()["compartments"]
+    assert not client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()["warnings"]
+    # gerader waagrechter Schnitt in der Mitte
+    mid = (P.bounds[1] + P.bounds[3]) / 2
+    cut = client.post(f"/api/inserts/{ins['id']}/compartments/edit",
+                      json={"spec": ins, "op": "cut", "indices": [0], "axis": "h", "at": mid}).json()
+    lo, hi = sorted((Polygon(q["polygon"]) for q in cut["compartments"]), key=lambda g: g.bounds[1])
+    assert lo.bounds[3] == pytest.approx(mid - 0.8, abs=0.4) and hi.bounds[1] == pytest.approx(mid + 0.8, abs=0.4)

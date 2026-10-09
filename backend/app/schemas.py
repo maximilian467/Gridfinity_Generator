@@ -19,6 +19,7 @@ class Profile(BaseModel):
     bottom_points: list[list[float]] | None = None   # veraltet (Stützpunkte); ersetzt durch levels
     levels: list[list[float]] | None = None          # Ebenen [a, b, z]: Taschenboden in Stufen (editierbar)
     measured: list[float] | None = None              # gemessene Unterseite (nur Anzeige)
+    fit_version: int = 1                             # 2 = Neigung auf Ebenen optimiert
 
 
 class ObjectSpec(BaseModel):

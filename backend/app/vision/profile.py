@@ -413,6 +413,31 @@ def fit_levels(s, bottom, reliable=None, count: int | None = None, max_levels: i
     return [[round(a, 1), round(b, 1), round(zv - zmin, 2)] for a, b, zv in levels]
 
 
+def best_tilt(s, bottom, reliable=None, max_deg: float = 6.0, steps: int = 49,
+              level_cost: float = 0.15) -> float:
+    """Neigung (Steigung mm/mm), bei der die Unterseite am besten auf wenigen waagrechten Ebenen
+    aufliegt. Die Ruhelage auf einem flachen Tisch (Hüllkurve) kippt z. B. eine Zange auf
+    Griffschutz und Griffende, der gerade Griff wirkt dann schräg. In der Tasche gibt es aber
+    Stufen: gerade Unterseiten sollen waagrecht liegen. Kosten = mittlere Luft unter dem
+    Werkzeug + kleiner Aufschlag je Ebene."""
+    from scipy.ndimage import median_filter
+    s = np.asarray(s, float)
+    b = np.asarray(bottom, float)
+    ok = np.ones(len(s), bool) if reliable is None else np.asarray(reliable, bool)
+    if ok.sum() < 10:
+        ok = np.ones(len(s), bool)
+    best_k, best_c = 0.0, np.inf
+    for k in np.tan(np.radians(np.linspace(-max_deg, max_deg, steps))):
+        z = b + k * s
+        zf = median_filter(z, size=9, mode="nearest")
+        lv = fit_levels(s, z, ok)
+        floor = bottom_from_levels(s, lv) + zf[ok].min()
+        c = float(np.mean((zf - floor)[ok])) + level_cost * len(lv) + 1e-3 * abs(k)
+        if c < best_c:
+            best_k, best_c = float(k), c
+    return best_k
+
+
 def _tidy_levels(levels: list[list[float]], L: float, min_step: float = 0.8) -> list[list[float]]:
     """Fast gleich hohe Nachbarn verbinden (tiefere Ebene gewinnt), kurze hohe Enden entfernen
     (z. B. Rest der Hand am Bildrand: dort ginge der Boden sonst sinnlos wieder hoch)."""
