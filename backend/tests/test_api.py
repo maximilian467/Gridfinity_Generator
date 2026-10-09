@@ -60,6 +60,16 @@ def test_full_flow_with_synthetic_photos():
     assert obj["length_mm"] == pytest.approx(L, abs=0.4)
     assert obj["width_mm"] == pytest.approx(W, abs=0.4)
     assert max(obj["profile"]["top"][10:-10]) == pytest.approx(T, abs=0.5)
+    # Balken: eine Ebene; feste Anzahl und Handkorrektur der Ebenen
+    assert len(obj["profile"]["levels"]) == 1 and len(obj["profile"]["measured"]) == len(obj["profile"]["s"])
+    o2 = client.post(f"/api/objects/{oid}/profile", json={"side_flip_lr": False, "level_count": 2}).json()
+    assert len(o2["profile"]["levels"]) == 2
+    o3 = client.post(f"/api/objects/{oid}/profile", json={"side_flip_lr": False,
+                                                          "levels": [[0, 60, 0], [60, 150, 3]]}).json()
+    lv = o3["profile"]["levels"]
+    assert [q[2] for q in lv] == [0, 3] and lv[-1][1] == pytest.approx(o3["length_mm"], abs=0.6)
+    assert o3["profile"]["bottom"][-1] == pytest.approx(3)
+    obj = client.post(f"/api/objects/{oid}/profile", json={"side_flip_lr": False}).json()
 
     # Einlage
     ins = client.post("/api/inserts", json={"name": "Test", "placements": [
@@ -120,3 +130,38 @@ def test_compartments_merge_split_and_reason():
                                               "placements": [{"object_id": demo["id"]}]}).json()
     r = client.post(f"/api/inserts/{tight['id']}/auto-compartments", json=tight).json()
     assert r["compartments"] == [] and "Platz" in r["reason"]
+
+
+def test_single_compartment_at_click():
+    from shapely.geometry import Point, Polygon
+    demo = client.post("/api/objects/demo").json()
+    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False, "comp_depth": None,
+                                            "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
+    lay = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
+    ox, oy = lay["outer"]
+    r = client.post(f"/api/inserts/{ins['id']}/compartments/at", json={"spec": ins, "x": 8, "y": oy / 2})
+    assert r.status_code == 200, r.text
+    comps = r.json()["compartments"]
+    assert len(comps) == 1 and comps[0]["depth"] is None
+    sx, sy = lay["shift"]
+    assert Polygon(comps[0]["polygon"]).buffer(0.6).contains(Point(8 - sx, oy / 2 - sy))
+    ins["compartments"] = comps
+    lay2 = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
+    assert not lay2["warnings"] and lay2["compartments"][0]["max_depth"]
+    # Klick in eine Tasche: verständlicher Fehler
+    bad = client.post(f"/api/inserts/{ins['id']}/compartments/at", json={"spec": ins, "x": ox / 2, "y": oy / 2})
+    assert bad.status_code == 422
+
+
+def test_set_levels_keeps_reference():
+    demo = client.post("/api/objects/demo").json()
+    lv = demo["profile"]["levels"]
+    T = max(demo["profile"]["top"])
+    gi = min(range(len(lv)), key=lambda i: lv[i][2])          # tiefste Ebene (Griffschutz)
+    lv2 = [[a, b, z - 2.0 if i == gi else z] for i, (a, b, z) in enumerate(lv)]
+    o = client.put(f"/api/objects/{demo['id']}/levels", json={"levels": lv2}).json()
+    # Griffschutz 2 mm tiefer = Werkzeug dort 2 mm dicker: andere Ebenen 2 mm höher, Oberseite mit
+    assert o["profile"]["levels"][gi][2] == 0
+    assert [q[2] for i, q in enumerate(o["profile"]["levels"]) if i != gi] == pytest.approx(
+        [q[2] + 2 for i, q in enumerate(lv) if i != gi])
+    assert max(o["profile"]["top"]) == pytest.approx(T + 2, abs=0.01)

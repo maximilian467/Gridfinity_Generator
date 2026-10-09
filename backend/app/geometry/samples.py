@@ -24,13 +24,17 @@ def synthetic_pliers(oid: str = "pliers") -> ObjectSpec:
         x0 += ln
     bottom -= bottom.min()
     top -= 0  # Dicke relativ bleibt; Ruhelage min(bottom)=0 gilt bereits
+    from ..vision.profile import bottom_from_levels, fit_levels
+    levels = fit_levels(s, bottom, count=len({sec[2] for sec in PLIERS_SECTIONS}))
+    bottom = bottom_from_levels(s, levels)
     upper = [(float(a), float(w) / 2) for a, w in zip(s, width)]
     lower = [(float(a), -float(w) / 2) for a, w in zip(s[::-1], width[::-1])]
     contour = Polygon(upper + lower).buffer(0)
     pts = [list(map(float, p)) for p in contour.exterior.coords][:-1]
     return ObjectSpec(id=oid, name="Spitzzange (synthetisch)", contour_mm=pts, length_mm=L,
                       width_mm=float(width.max()),
-                      profile=Profile(ds=ds, s=s.tolist(), bottom=bottom.tolist(), top=top.tolist()))
+                      profile=Profile(ds=ds, s=s.tolist(), bottom=bottom.tolist(), top=top.tolist(),
+                                      levels=levels, measured=bottom.tolist()))
 
 
 def l_shape(oid: str = "lform") -> ObjectSpec:

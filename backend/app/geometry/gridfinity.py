@@ -12,6 +12,7 @@ BIN_TOL = 0.5          # Bin-Außenmaß = n*42 - 0.5
 UNIT_H = 7.0
 FOOT_H = 4.75
 LIP_MARGIN = 2.6       # Randbreite des Stapelrands (Cutter-Abstand zur Außenkante)
+LIP_H = 3.8            # Höhe des Stapelrands über der Oberfläche (gemessen)
 BIN_RADIUS = 3.75
 
 
@@ -19,11 +20,11 @@ def bin_outer(grid_x: int, grid_y: int) -> tuple[float, float]:
     return grid_x * PITCH - BIN_TOL, grid_y * PITCH - BIN_TOL
 
 
-def surface_z(height_u: int) -> float:
+def surface_z(height_u: float) -> float:
     return UNIT_H * height_u
 
 
-def make_bin(grid_x: int, grid_y: int, height_u: int, *, stacking_lip: bool = True,
+def make_bin(grid_x: int, grid_y: int, height_u: float, *, stacking_lip: bool = True,
              magnets: bool = False) -> cq.Workplane:
     """Massiver Bin. Mit Stapelrand: Rand-Ring über z = 7*height_u (Innenraum offen).
     Ohne Stapelrand: bei z = 7*height_u plan abgeschnitten."""

@@ -57,3 +57,19 @@ def compute_zones(s, bottom, length: float, margin: float, step_tol: float = 1.0
         diffs = [abs(zones[i].floor - zones[i + 1].floor) for i in range(len(zones) - 1)]
         merge(int(np.argmin(diffs)), int(np.argmin(diffs)) + 1)
     return zones
+
+
+def zones_from_levels(levels, length: float, margin: float) -> list[Zone]:
+    """Zonen direkt aus den Ebenen [a, b, z]. An jedem Absatz reicht die tiefere Ebene um das
+    Spiel (margin) in die höhere hinein, damit das Werkzeugende samt Spiel hineinpasst."""
+    zs = [Zone(float(a), float(b), float(z)) for a, b, z in levels]
+    for lo, hi in zip(zs[:-1], zs[1:]):
+        cut = lo.b
+        if lo.floor < hi.floor:
+            cut = min(cut + margin, hi.b - 0.5)
+        elif lo.floor > hi.floor:
+            cut = max(cut - margin, lo.a + 0.5)
+        lo.b = hi.a = cut
+    zs[0].a = -margin
+    zs[-1].b = length + margin
+    return zs

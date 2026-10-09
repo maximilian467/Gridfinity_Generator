@@ -33,14 +33,15 @@ def layout_payload(spec: InsertSpec) -> dict:
     ox, oy = lay.outer
     return {
         "grid_x": lay.grid_x, "grid_y": lay.grid_y, "height_u": lay.height_u, "z_surface": lay.z_surface,
+        "total_height": lay.total_height, "sink": lay.sink,
         "outer": [ox, oy],
         "pieces": [{"placement": p.placement, "zone": p.zone, "z0": p.z0, "depth": lay.z_surface - p.z0,
                     "polygons": _polys(p.poly)} for p in lay.pieces],
         "grips": [{"z0": g.z0, "depth": lay.z_surface - g.z0, "polygons": _polys(g.poly), "auto": g.auto,
                    "placement": g.placement, "rounded": g.rounded,
                    "params": g.params.model_dump() if g.params else None} for g in lay.grips],
-        "compartments": [{"z0": c.z0, "depth": lay.z_surface - c.z0, "polygons": _polys(c.poly), "auto": c.auto}
-                         for c in lay.comps],
+        "compartments": [{"z0": c.z0, "depth": lay.z_surface - c.z0, "polygons": _polys(c.poly), "auto": c.auto,
+                          "max_depth": c.free_depth} for c in lay.comps],
         "shift": list(lay.shift),
         "zones": [[{"a": z.a, "b": z.b, "floor": z.floor} for z in zs] for zs in lay.zones],
         "warnings": lay.warnings,
@@ -93,7 +94,6 @@ def layout(iid: str, spec: InsertSpec | None = None) -> dict:
 @router.post("/{iid}/auto-compartments")
 def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
     """Vorschläge für Kästen in den freien Flächen (frei geformt, Wand folgt der Kontur)."""
-    from ..geometry.gridfinity import FOOT_H
     from ..geometry.layout import auto_compartments
     from ..schemas import Compartment
 
@@ -102,14 +102,14 @@ def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
     keep = [c for c in spec.compartments if not c.generated]
     lay = compute_layout(spec.model_copy(update={"auto_compartments": False, "compartments": keep}), storage.objects_for(spec))
     sx, sy = lay.shift
-    depth = spec.comp_depth or (lay.z_surface - FOOT_H - spec.floor_min)
+    depth = round(spec.comp_depth, 1) if spec.comp_depth else None
     out = []
     for poly in auto_compartments(lay, spec):
         # in Spec-Koordinaten (vor Zentrierung) zurückgeben, damit sie mit dem Inhalt mitwandern
         from shapely import affinity
         p = affinity.translate(poly, -sx, -sy)
         x0, y0, x1, y1 = p.bounds
-        out.append(Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, depth=round(depth, 1), generated=True,
+        out.append(Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, depth=depth, generated=True,
                                polygon=[list(map(lambda v: round(v, 2), c)) for c in p.exterior.coords]))
     reason = None
     if not out:
@@ -155,7 +155,8 @@ def edit_compartments(iid: str, body: CompEdit) -> dict:
         raise HTTPException(422, "Zum Verbinden mindestens zwei Kästen auswählen")
     polys = [comp_polygon(spec.compartments[i]) for i in idx]
     free, wall = _free_area(spec, set(idx))
-    depth = min(spec.compartments[i].depth for i in idx)
+    ds = [spec.compartments[i].depth for i in idx if spec.compartments[i].depth is not None]
+    depth = min(ds) if ds else None
 
     def as_comp(p: Polygon) -> Compartment:
         p = p.buffer(-2.0, join_style=1).buffer(2.0, join_style=1).simplify(0.1)
@@ -193,6 +194,42 @@ def edit_compartments(iid: str, body: CompEdit) -> dict:
             new += [as_comp(g) for g in pieces]
     keep = [c for i, c in enumerate(spec.compartments) if i not in idx]
     return {"compartments": [c.model_dump() for c in keep + new]}
+
+
+class CompAt(BaseModel):
+    spec: InsertSpec
+    x: float = Field(ge=-2000, le=2000)      # Klickpunkt im Layout (nach Zentrierung)
+    y: float = Field(ge=-2000, le=2000)
+
+
+@router.post("/{iid}/compartments/at")
+def compartment_at(iid: str, body: CompAt) -> dict:
+    """Einzelnen Kasten anlegen: füllt die freie Fläche um den Klickpunkt (Wand folgt der
+    Kontur, Abstand = Wandstärke). Danach teilbar/verbindbar wie die erzeugten Kästen."""
+    from shapely import affinity
+    from shapely.geometry import Point
+
+    from ..geometry.layout import auto_compartments
+    from ..schemas import Compartment
+
+    spec = body.spec.model_copy(update={"id": iid})
+    layout_payload(spec)
+    lay = compute_layout(spec.model_copy(update={"auto_compartments": False}), storage.objects_for(spec))
+    pt = Point(body.x, body.y)
+    # dieselben Vorgaben wie 'Kästen erzeugen' (größte freie Rechtecke, an die Kontur gewachsen),
+    # davon der Kasten unter dem Klickpunkt
+    probe = spec.model_copy(update={"comp_min_size": min(spec.comp_min_size, 10.0)})
+    cands = auto_compartments(lay, probe, max_n=30)
+    region = next((g for g in cands if g.buffer(0.5).contains(pt)), None)
+    if region is None:
+        raise HTTPException(422, "Dort ist kein freier Platz für einen Kasten (Tasche, Mulde oder Kasten zu nah)")
+    region = affinity.translate(region, -lay.shift[0], -lay.shift[1])
+    region = region.simplify(0.1)
+    x0, y0, x1, y1 = region.bounds
+    c = Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, generated=True,
+                    depth=round(spec.comp_depth, 1) if spec.comp_depth else None,
+                    polygon=[[round(a, 2), round(b, 2)] for a, b in region.exterior.coords])
+    return {"compartments": [c.model_dump() for c in spec.compartments] + [c.model_dump()]}
 
 
 @router.post("/{iid}/build")

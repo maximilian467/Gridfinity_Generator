@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useNavigate, useParams } from 'react-router'
 import { ArrowClockwise, CheckCircle, CrosshairSimple, DownloadSimple, Plus, Rows, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
-import type { Compartment, GripRecess, InsertSpec, ObjectSpec } from '../../lib/types'
+import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec } from '../../lib/types'
 import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
 import { arrange, placeNew } from '../../lib/placement'
 import { Editor2D } from './Editor2D'
@@ -52,6 +52,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const [spec, setSpec] = useState<InsertSpec>(initial)
   const [sel, setSel] = useState<Sel>(null)
   const [compSel, setCompSel] = useState<number[]>([])
+  const [pocketPt, setPocketPt] = useState<{ pi: number; s: number } | null>(null)
   const [compMsg, setCompMsg] = useState<{ text: string; grid: [number, number] } | null>(null)
   const select = (s: Sel, additive?: boolean) => {
     setSel(s)
@@ -194,10 +195,19 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [sel, compSel])
-  const addComp = () => {
-    patch({ compartments: [...spec.compartments, { x: 10, y: 10, w: 25, l: 25, radius: 3, depth: 15 }] })
-    setSel({ kind: 'comp', index: spec.compartments.length })
-  }
+  // einzelner Kasten: Klick in eine freie Fläche, Form nach denselben Vorgaben wie 'Kästen erzeugen'
+  const [picking, setPicking] = useState(false)
+  const compAt = useMutation({
+    mutationFn: (p: { x: number; y: number }) => api.compartmentAt(spec, p.x, p.y),
+    onSuccess: (r) => { patch({ compartments: r.compartments }); select({ kind: 'comp', index: r.compartments.length - 1 }) },
+  })
+  const onPick = (x: number, y: number) => { setPicking(false); compAt.mutate({ x, y }) }
+  useEffect(() => {
+    if (!picking) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPicking(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [picking])
 
   const lay = layout.data
   const warnings = lay?.warnings ?? []
@@ -218,10 +228,23 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               <NumberField label="Tiefe" unit="E" step={1} min={1} value={spec.grid_y ?? 1} onChange={(v) => patch({ grid_y: Math.round(v) })} />
             </div>
           )}
-          <Check label="Höhe automatisch" checked={spec.height_u === null}
-            onChange={(v) => patch({ height_u: v ? null : lay?.height_u ?? 4 })} />
-          {spec.height_u !== null && <NumberField label="Höhe" unit="U (7 mm)" step={1} min={1} value={spec.height_u} onChange={(v) => patch({ height_u: Math.round(v) })} />}
-          {lay && <div className="num hint">{lay.grid_x} x {lay.grid_y} Einheiten, {lay.height_u} U = {(lay.height_u * 7).toFixed(0)} mm</div>}
+          <Check label="Höhe automatisch" checked={spec.height_u === null && spec.height_mm === null}
+            onChange={(v) => patch(v ? { height_u: null, height_mm: null } : { height_u: null, height_mm: Math.round(lay?.total_height ?? 32) })} />
+          {spec.height_mm !== null && (
+            <NumberField label="Gesamthöhe" step={1} min={10} value={spec.height_mm} onChange={(v) => patch({ height_mm: v, height_u: null })}
+              hint={spec.stacking_lip ? 'inkl. Stapelrand (3,8 mm), ohne Werkzeug' : 'ohne Werkzeug'} />
+          )}
+          {spec.height_u !== null && spec.height_mm === null && (
+            <NumberField label="Höhe" unit="U (7 mm)" step={1} min={1} value={spec.height_u} onChange={(v) => patch({ height_u: Math.round(v) })} />
+          )}
+          {lay && <div className="num hint">{lay.grid_x} x {lay.grid_y} Einheiten, {lay.total_height.toFixed(1)} mm hoch</div>}
+          <label className="grid gap-1 mt-1">
+            <span className="label mb-0">Werkzeug sinkt ein <span className="num">{Math.round(spec.sink * 100)} %</span>
+              {lay && lay.sink.length > 0 && Math.min(...lay.sink) < spec.sink - 0.01 && <span className="num" style={{ color: 'var(--warn)' }}> (bei dieser Höhe {Math.round(Math.min(...lay.sink) * 100)} %)</span>}
+            </span>
+            <input type="range" min={30} max={100} step={5} value={Math.round(spec.sink * 100)} onChange={(e) => patch({ sink: +e.target.value / 100 })} />
+            <span className="hint mt-0">Anteil der Werkzeugdicke, der in der Tasche verschwindet. 50 bis 75 % lässt sich gut greifen, 100 % = bündig.</span>
+          </label>
           <Check label="Stapelrand" checked={spec.stacking_lip} onChange={(v) => patch({ stacking_lip: v })} />
           <Check label="Magnetlöcher" checked={spec.magnets} onChange={(v) => patch({ magnets: v })} />
         </section>
@@ -237,7 +260,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               <NumberField label="Tiefe unter Werkzeug" value={spec.grip_depth_below} step={1} min={2} onChange={(v) => patch({ grip_depth_below: v })} />
             </div>
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip}><Plus size={14} /> Greifmulde automatisch setzen</button>
-            <div className="hint mt-0">Wird quer am Schwerpunkt gesetzt (bei Zangen am Gelenk), Boden rund ausgeformt. Danach frei verschieb- und drehbar.</div>
+            <div className="hint mt-0">Wird quer am Schwerpunkt gesetzt (bei Zangen am Gelenk). Querschnitt oval mit gerundeter Oberkante, ohne harte Kante. Danach entlang des Werkzeugs verschiebbar.</div>
           </div>
           <div className="grid gap-2 mt-1">
             <div className="text-sm font-medium">Kästen in den freien Flächen</div>
@@ -252,7 +275,10 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               </button>
               {nGenerated > 0 && <button className="btn btn-sm" onClick={clearComps}><Trash size={14} /> Alle {nGenerated} entfernen</button>}
             </div>
-            <div className="hint mt-0">Jeder Kasten lässt sich anklicken und einzeln löschen (Knopf rechts oder Entf-Taste).</div>
+            <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}>
+              <Plus size={14} /> {picking ? 'In freie Fläche klicken …' : 'Einzelnen Kasten einfügen'}</button>
+            <div className="hint mt-0">Kästen anklicken: einzeln löschen (Entf), in Fächer teilen oder mit Shift-Klick mehrere verbinden.</div>
+            {compAt.isError && <Msg kind="err">{errText(compAt.error)}</Msg>}
             {genComps.isError && <Msg kind="err">{errText(genComps.error)}</Msg>}
             {compMsg && (
               <Msg kind="warn">{compMsg.text}
@@ -262,8 +288,8 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
           </div>
           <label className="grid gap-1">
             <span className="label mb-0">Kontur glätten <span className="num">{spec.smooth_mm.toFixed(1)} mm</span></span>
-            <input type="range" min={0} max={5} step={0.5} value={spec.smooth_mm} onChange={(e) => patch({ smooth_mm: +e.target.value })} />
-            <span className="hint mt-0">Füllt kleine Kerben und Zacken der Kontur. Die Tasche wird dabei nie kleiner als das Werkzeug.</span>
+            <input type="range" min={0} max={8} step={0.5} value={spec.smooth_mm} onChange={(e) => patch({ smooth_mm: +e.target.value })} />
+            <span className="hint mt-0">Glatte, ruhige Taschenkontur: Kerben und Zacken bis zu dieser Größe verschwinden. Die Tasche wird dabei nie kleiner als Werkzeug + Spiel.</span>
           </label>
         </section>
 
@@ -276,16 +302,12 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
           <NumberField label="Spiel seitlich" value={spec.clearance_xy} step={0.1} min={0} max={4} onChange={(v) => patch({ clearance_xy: v })} hint="Standard 1,5 mm" />
           <NumberField label="Zusatzspiel an den Enden" value={spec.clearance_end} step={0.1} min={0} onChange={(v) => patch({ clearance_end: v })} />
           <NumberField label="Abstand Boden zu Werkzeug" value={spec.clearance_z} step={0.1} min={0} onChange={(v) => patch({ clearance_z: v })} />
-          <NumberField label="Überstand (+) / versenkt (-)" value={spec.overhang} step={0.5} onChange={(v) => patch({ overhang: v })}
-            hint={spec.overhang > 0 ? 'Nicht stapelbar' : undefined} />
         </section>
 
         <details className="grid gap-2">
-          <summary className="sect cursor-pointer">Stufen und Wände</summary>
+          <summary className="sect cursor-pointer">Boden und Wände</summary>
           <div className="grid gap-2 mt-2">
-            <NumberField label="Stufentoleranz" value={spec.step_tol} step={0.1} min={0.1} onChange={(v) => patch({ step_tol: v })} />
-            <NumberField label="Min. Zonenlänge" value={spec.min_zone_len} step={1} min={1} onChange={(v) => patch({ min_zone_len: v })} />
-            <NumberField label="Max. Zonen" unit="" value={spec.max_zones} step={1} min={1} onChange={(v) => patch({ max_zones: Math.round(v) })} />
+            <div className="hint mt-0">Die Stufen kommen aus den Ebenen im Seitenprofil des Objekts.</div>
             <NumberField label="Min. Material unter Boden" value={spec.floor_min} step={0.1} min={0.4} onChange={(v) => patch({ floor_min: v })} />
             <NumberField label="Min. Wand" value={spec.min_wall} step={0.1} min={0.4} onChange={(v) => patch({ min_wall: v })} />
           </div>
@@ -314,7 +336,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
       <section className="min-w-0 p-4 grid grid-cols-[minmax(0,1fr)] gap-3 content-start">
         <header className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold tracking-tight mr-2">{spec.name || 'Einlage'}</h1>
-          {lay && <span className="chip num">{lay.grid_x} x {lay.grid_y} Einheiten · {lay.height_u * 7} mm hoch</span>}
+          {lay && <span className="chip num">{lay.grid_x} x {lay.grid_y} Einheiten · {lay.total_height.toFixed(1)} mm hoch</span>}
           <span className={`chip ${saveState === 'error' ? 'chip-err' : saveState === 'saved' ? 'chip-ok' : ''}`}>
             {saveState === 'saved' ? <><CheckCircle size={14} /> Gespeichert</> : saveState === 'pending' ? 'Speichere …' : <><XCircle size={14} /> Nicht gespeichert</>}
           </span>
@@ -333,7 +355,8 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <button className="btn btn-sm" onClick={doArrange} disabled={!spec.placements.length} title="Objekte an die Innenecke rücken und untereinander anordnen"><Rows size={14} /> Anordnen</button>
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip} title="Greifmulde automatisch am Schwerpunkt setzen"><Plus size={14} /> Greifmulde</button>
-            <button className="btn btn-sm" onClick={addComp}><Plus size={14} /> Fach</button>
+            <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}
+              title="Danach in eine freie Fläche klicken: dort entsteht ein Kasten, dessen Wand der Kontur folgt"><Plus size={14} /> Kasten</button>
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
               <CrosshairSimple size={14} /> Mittig{spec.auto_center ? ' (aktiv)' : ''}
@@ -355,9 +378,18 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             {spec.placements.length === 0 && usable.length > 0 && (
               <Msg kind="info">Noch kein Werkzeug in dieser Einlage. Oben über "Objekt hinzufügen" ein gescanntes Werkzeug wählen.</Msg>
             )}
+            {picking && <Msg kind="info">In eine freie Fläche klicken: dort entsteht ein Kasten, dessen Wand der Werkzeugkontur folgt. Esc bricht ab.</Msg>}
+            {compAt.isError && !picking && <Msg kind="err">{errText(compAt.error)}</Msg>}
             <div className="panel p-2 relative">
               {layout.isFetching && <div className="absolute inset-x-2 top-1"><BusyBar /></div>}
-              <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={select} onMove={move} selectedComps={compSel} />
+              <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={select} onMove={move} selectedComps={compSel}
+                onPick={picking ? onPick : undefined}
+                onPocketClick={(pi, x, y) => {
+                  // Klickpunkt -> Position entlang der Werkzeugachse (objekt-lokal x)
+                  const pl = spec.placements[pi]; const [sx0, sy0] = lay?.shift ?? [0, 0]
+                  const a = (pl.rot_deg * Math.PI) / 180, dx = x - sx0 - pl.x, dy = y - sy0 - pl.y
+                  setPocketPt({ pi, s: dx * Math.cos(a) + dy * Math.sin(a) })
+                }} />
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm" style={{ color: 'var(--ink-2)' }}>
               <span className="inline-flex items-center gap-2">
@@ -408,7 +440,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
       {/* Rechts */}
       <aside className="panel p-3 grid gap-4 content-start overflow-y-auto" style={{ borderRadius: 0, borderWidth: '0 0 0 1px', maxHeight: 'calc(100dvh - 56px)' }}>
-        <SelectionPanel spec={spec} sel={sel} setSpec={setSpec} onSel={select} objMap={objMap}
+        <SelectionPanel spec={spec} lay={lay} sel={sel} setSpec={setSpec} onSel={select} objMap={objMap} pocketPt={pocketPt}
           compSel={compSel} onMerge={() => editComps.mutate({ op: 'merge' })} onSplit={(n) => editComps.mutate({ op: 'split', parts: n })}
           compBusy={editComps.isPending} compErr={editComps.isError ? errText(editComps.error) : null}  />
 
@@ -460,15 +492,16 @@ function Checks({ job }: { job: NonNullable<ReturnType<typeof useQuery<import('.
           <span>{label}</span></div>
       ))}
       <div className="num hint">
-        {c.grid_x} x {c.grid_y} x {c.height_u} U · {Math.round(c.volume_mm3 / 1000)} cm³ · ca. {c.weight_g} g PLA
+        {c.grid_x} x {c.grid_y} Einheiten · {Number(c.bbox?.[2] ?? c.height_u * 7).toFixed(1)} mm hoch · {Math.round(c.volume_mm3 / 1000)} cm³ · ca. {c.weight_g} g PLA
       </div>
       <Msgs items={job.warnings} />
     </div>
   )
 }
 
-function SelectionPanel({ spec, sel, setSpec, onSel, objMap, compSel, onMerge, onSplit, compBusy, compErr }: {
-  spec: InsertSpec; sel: Sel; setSpec: (f: (s: InsertSpec) => InsertSpec) => void; onSel: (s: Sel) => void
+function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMerge, onSplit, compBusy, compErr, pocketPt }: {
+  spec: InsertSpec; lay: LayoutOut | undefined; sel: Sel; setSpec: (f: (s: InsertSpec) => InsertSpec) => void; onSel: (s: Sel) => void
+  pocketPt: { pi: number; s: number } | null
   objMap: Record<string, ObjectSpec>; compSel: number[]; onMerge: () => void; onSplit: (n: number) => void
   compBusy: boolean; compErr: string | null
 }) {
@@ -515,6 +548,10 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, compSel, onMerge, o
           {[-90, 90, 180].map((d) => <button key={d} className="btn btn-sm" onClick={() => upd({ rot_deg: (((p.rot_deg + d) % 360) + 360) % 360 })}>{d > 0 ? '+' : ''}{d}°</button>)}
         </div>
         <div className="hint">X/Y ist der Ursprung des Objekts (linkes Ende der Längsachse).</div>
+        {objMap[p.object_id]?.profile?.levels && (
+          <LevelTools obj={objMap[p.object_id]} s={pocketPt?.pi === sel.index ? pocketPt.s : null}
+            pieces={lay?.pieces.filter((q) => q.placement === sel.index) ?? []} />
+        )}
         {del}
       </div>
     )
@@ -538,9 +575,10 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, compSel, onMerge, o
           <NumberField label="Breite" value={g.w} step={0.5} min={4} onChange={(v) => upd({ w: v })} />
           {!g.auto_length && <NumberField label="Länge" value={g.l} step={1} min={4} onChange={(v) => upd({ l: v })} />}
           <NumberField label="Tiefe unter Tasche" value={g.depth_below} step={1} min={0} onChange={(v) => upd({ depth_below: v })} />
+          <NumberField label="Kantenradius" value={g.edge_r ?? 4} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
         </div>
         <Check label="Länge automatisch (Breite der Tasche + Überstand)" checked={g.auto_length !== false} onChange={(v) => upd({ auto_length: v })} />
-        <Check label="Rund ausgeformter Boden" checked={g.rounded !== false} onChange={(v) => upd({ rounded: v })} />
+        <Check label="Weich ausgeformt (ovaler Boden, runde Kante)" checked={g.rounded !== false} onChange={(v) => upd({ rounded: v })} />
         <button className="btn btn-sm" onClick={() => upd({ attach: null })}>Vom Werkzeug lösen (frei verschieben)</button>
         {del}
       </div>
@@ -557,18 +595,26 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, compSel, onMerge, o
         </div>
         <NumberField label="Drehung" unit="°" value={g.rot_deg} step={5} onChange={(v) => upd({ rot_deg: v })} />
         <NumberField label="Tiefe unter Taschenboden" value={g.depth_below} step={1} min={0} onChange={(v) => upd({ depth_below: v })} />
+        {g.shape !== 'rect' && <>
+          <NumberField label="Kantenradius" value={g.edge_r ?? 4} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
+          <Check label="Weich ausgeformt (ovaler Boden, runde Kante)" checked={g.rounded !== false} onChange={(v) => upd({ rounded: v })} />
+        </>}
         {del}
       </div>
     )
   }
   const c = spec.compartments[sel.index]
   if (!c) return null
+  const lc = lay?.compartments.filter((q) => !q.auto)[sel.index]
+  const maxDepth = lc ? lc.depth : null
   const upd = (q: Partial<Compartment>) => setSpec((s) => ({ ...s, compartments: s.compartments.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
   if (c.polygon) return (
     <div className="grid gap-2">
       <h3 className="sect">Kasten</h3>
       <div className="num hint mt-0">ca. {Math.round(c.w)} x {Math.round(c.l)} mm</div>
-      <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />
+      <Check label="So tief wie möglich" checked={c.depth === null} onChange={(v) => upd({ depth: v ? null : Math.round(maxDepth ?? 15) })} />
+      {c.depth !== null && <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />}
+      {c.depth === null && maxDepth !== null && <div className="num hint mt-0">derzeit {maxDepth.toFixed(1)} mm (folgt der Einlagenhöhe)</div>}
       <div className="text-sm font-medium mt-1">Teilen in gleich große Fächer</div>
       <div className="flex gap-2">
         {[2, 3, 4].map((n) => <button key={n} className="btn btn-sm" onClick={() => onSplit(n)} disabled={compBusy}>{n} Fächer</button>)}
@@ -587,9 +633,62 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap, compSel, onMerge, o
         <NumberField label="Breite" value={c.w} step={0.5} min={4} onChange={(v) => upd({ w: v })} />
         <NumberField label="Länge" value={c.l} step={0.5} min={4} onChange={(v) => upd({ l: v })} />
         <NumberField label="Eckradius" value={c.radius} step={0.5} min={0} onChange={(v) => upd({ radius: v })} />
-        <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />
+        {c.depth !== null && <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />}
       </div>
+      <Check label="So tief wie möglich" checked={c.depth === null} onChange={(v) => upd({ depth: v ? null : Math.round(maxDepth ?? 15) })} />
       {del}
+    </div>
+  )
+}
+
+
+/** Taschenboden an der angeklickten Stelle: tiefer/flacher setzen oder dort eine eigene Ebene
+ *  anlegen. Ändert die Ebenen des Werkzeugs (gilt in allen Einlagen mit diesem Werkzeug). */
+function LevelTools({ obj, s, pieces }: { obj: ObjectSpec; s: number | null; pieces: LayoutOut['pieces'] }) {
+  const qc = useQueryClient()
+  const levels = obj.profile!.levels!
+  const save = useMutation({
+    mutationFn: (lv: Level[]) => api.setLevels(obj.id, lv),
+    onSuccess: (o) => {
+      qc.setQueryData<ObjectSpec[]>(['objects'], (cur) => cur?.map((q) => (q.id === o.id ? o : q)))
+      qc.invalidateQueries({ queryKey: ['layout'] })
+    },
+  })
+  if (s === null) return (
+    <div className="grid gap-1 mt-2">
+      <h3 className="sect">Taschenboden</h3>
+      <div className="hint mt-0">In die Tasche klicken, um den Boden an dieser Stelle tiefer oder flacher zu setzen.</div>
+    </div>
+  )
+  const L = levels[levels.length - 1][1]
+  const sc = Math.min(Math.max(s, 0), L)
+  const i = Math.max(0, levels.findIndex((q) => sc >= q[0] && sc < q[1]) === -1 ? levels.length - 1 : levels.findIndex((q) => sc >= q[0] && sc < q[1]))
+  const [a, b, z] = levels[i]
+  const depth = pieces.find((q) => q.zone === i)?.depth
+  const shift = (d: number) => save.mutate(levels.map((q, j) => (j === i ? [q[0], q[1], Math.round((q[2] - d) * 10) / 10] as Level : q)))
+  const own = () => {
+    const lo = Math.max(a, sc - 8), hi = Math.min(b, sc + 8)
+    const parts: Level[] = []
+    if (lo - a >= 3) parts.push([a, lo, z])
+    parts.push([lo - a >= 3 ? lo : a, hi > b - 3 ? b : hi, z])
+    if (b - hi >= 3) parts.push([hi, b, z])
+    save.mutate([...levels.slice(0, i), ...parts, ...levels.slice(i + 1)])
+  }
+  return (
+    <div className="grid gap-2 mt-2">
+      <h3 className="sect">Taschenboden an der Klickstelle</h3>
+      <div className="num hint mt-0">Ebene {i + 1} von {levels.length}: {a.toFixed(0)} bis {b.toFixed(0)} mm entlang des Werkzeugs
+        {depth !== undefined && <>, {depth.toFixed(1)} mm tief</>}</div>
+      <div className="flex gap-2 flex-wrap">
+        <button className="btn btn-sm" onClick={() => shift(1)} disabled={save.isPending}>1 mm tiefer</button>
+        <button className="btn btn-sm" onClick={() => shift(-1)} disabled={save.isPending}>1 mm flacher</button>
+      </div>
+      <button className="btn btn-sm justify-self-start" onClick={own} disabled={save.isPending || levels.length >= 8 || b - a < 10}
+        title="Teilt die Ebene: um die Klickstelle (± 8 mm) entsteht eine eigene Ebene, die du dann tiefer setzen kannst">
+        Hier eigene Ebene (± 8 mm)</button>
+      <div className="hint mt-0">Liegt das Werkzeug hier tiefer (z. B. Griffschutz), erst eine eigene Ebene anlegen, dann tiefer setzen.
+        Gilt für dieses Werkzeug in allen Einlagen.</div>
+      {save.isError && <Msg kind="err">{errText(save.error)}</Msg>}
     </div>
   )
 }

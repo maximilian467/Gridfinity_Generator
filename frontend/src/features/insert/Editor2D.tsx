@@ -32,9 +32,13 @@ function centroid(p: PolyOut): [number, number] {
 
 /** Draufsicht der Einlage im mm-Maßstab. Positionen in der Spec gelten vor der automatischen
  *  Zentrierung; das Layout liefert die Verschiebung (shift) mit. */
-export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [] }: {
+export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], onPick, onPocketClick }: {
   spec: InsertSpec; layout: LayoutOut | undefined; objects?: Record<string, ObjectSpec>
   sel: Sel; onSelect: (s: Sel, additive?: boolean) => void; selectedComps?: number[]
+  /** gesetzt: nächster Klick liefert die Layout-Position (mm) statt etwas auszuwählen */
+  onPick?: (x: number, y: number) => void
+  /** Klick in eine Tasche: Platzierung und Layout-Position (mm) */
+  onPocketClick?: (pi: number, x: number, y: number) => void
   onMove: (s: NonNullable<Sel>, x: number, y: number) => void
 }) {
   const tk = useTokens()
@@ -75,7 +79,7 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   const cellLine = (i: number, n: number) => i * 42 - (i === 0 ? 0 : i === n ? 0.5 : 0.25)
 
   return (
-    <div ref={wrap} className="w-full">
+    <div ref={wrap} className="w-full" style={{ cursor: onPick ? 'crosshair' : undefined }}>
       <Stage width={w} height={h} onMouseDown={(e) => e.target === e.target.getStage() && onSelect(null)}>
         <Layer>
           <Rect x={px(0)} y={py(OY)} width={OX * k} height={OY * k} stroke={tk['line-2']} strokeWidth={2} cornerRadius={3.75 * k}
@@ -108,7 +112,11 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
             const ox = pl.x + sx, oy = pl.y + sy
             return (
               <Group key={'pl' + pi} x={px(ox)} y={py(oy)} draggable
-                onMouseDown={() => onSelect({ kind: 'placement', index: pi })}
+                onMouseDown={(e) => {
+                  onSelect({ kind: 'placement', index: pi })
+                  const pos = e.target.getStage()?.getPointerPosition()
+                  if (pos) onPocketClick?.(pi, (pos.x - left) / k, OY - (pos.y - PAD) / k)
+                }}
                 onDragEnd={dragEnd({ kind: 'placement', index: pi })}>
                 {pieces.map((pc, zi) => (
                   <Polys key={zi} polys={pc.polygons} ox={ox} oy={oy} k={k}
@@ -162,10 +170,18 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
                 onDragEnd={dragEnd({ kind: 'comp', index: ci })}>
                 <Polys polys={lc?.polygons ?? []} ox={ox} oy={oy} k={k} fill={alpha(tk.green, 0.3)}
                   stroke={act ? tk.accent : tk.green} width={act ? 2.5 : 1.25} />
-                {lc?.polygons[0] && label(...centroid(lc.polygons[0]), c.depth.toFixed(0), ox, oy)}
+                {lc?.polygons[0] && label(...centroid(lc.polygons[0]), lc.max_depth ? 'max' : lc.depth.toFixed(0), ox, oy)}
               </Group>
             )
           })}
+          {onPick && (
+            <Rect x={0} y={0} width={w} height={h} fill="transparent"
+              onMouseDown={(e) => {
+                e.cancelBubble = true
+                const pos = e.target.getStage()!.getPointerPosition()!
+                onPick(Math.round(((pos.x - left) / k) * 10) / 10, Math.round((OY - (pos.y - PAD) / k) * 10) / 10)
+              }} />
+          )}
         </Layer>
       </Stage>
     </div>

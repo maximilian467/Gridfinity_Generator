@@ -97,7 +97,7 @@ export function Library() {
                   {i.name}
                 </button>
                 <span className="num text-xs" style={{ color: 'var(--ink-2)' }}>
-                  {i.grid_x ?? 'auto'} x {i.grid_y ?? 'auto'} x {i.height_u ?? 'auto'} · {i.placements.length} Objekt(e)
+                  {i.grid_x ?? 'auto'} x {i.grid_y ?? 'auto'} · {i.height_mm ? `${i.height_mm} mm` : i.height_u ? `${i.height_u} U` : 'Höhe auto'} · {i.placements.length} Objekt(e)
                 </span>
                 <button className="btn btn-sm btn-quiet" aria-label="Duplizieren" onClick={() => dupIns.mutate(i.id)}><Copy size={14} /></button>
                 <button className="btn btn-sm btn-quiet" aria-label="Löschen"

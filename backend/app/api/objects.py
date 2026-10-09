@@ -94,7 +94,9 @@ class ProfileBody(BaseModel):
     side_flip_lr: bool | None = None
     side_flip_ud: bool | None = None
     calipers: dict[str, Annotated[float, Field(ge=0, le=2000)]] | None = Field(None, max_length=4)
-    bottom_points: Annotated[list[Pt], Field(min_length=2, max_length=60)] | None = None
+    levels: Annotated[list[Annotated[list[float], Field(min_length=3, max_length=3)]],
+                      Field(min_length=1, max_length=8)] | None = None      # Ebenen [a, b, z] (Handkorrektur)
+    level_count: int | None = Field(None, ge=1, le=5)                        # Anzahl Ebenen neu erkennen
     profile_overrides: dict[str, Annotated[list[float], Field(max_length=20000)]] | None = Field(None, max_length=2)
 
 
@@ -287,6 +289,40 @@ async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_ho
     return _save_mask(spec, view, rect, mask, fill_holes)
 
 
+def _level_ref(measured, reliable) -> float:
+    """Höhe der Messung, die der tiefsten Ebene (z = 0) entspricht (wie in fit_levels gefiltert)."""
+    from scipy.ndimage import median_filter
+    z = median_filter(measured, size=9, mode="nearest")
+    return float(z[reliable].min()) if reliable.any() else float(z.min())
+
+
+class LevelsBody(BaseModel):
+    levels: Annotated[list[Annotated[list[float], Field(min_length=3, max_length=3)]], Field(min_length=1, max_length=8)]
+
+
+@router.put("/{oid}/levels", response_model=ObjectSpec)
+def set_levels(oid: str, body: LevelsBody) -> ObjectSpec:
+    """Ebenen von Hand setzen, ohne die Fotos neu auszuwerten (schnell; geht auch für die Demo).
+    Die Höhen gelten im aktuellen Bezug; wird eine Ebene die tiefste, wandert alles mit,
+    d. h. das Werkzeug ist dort entsprechend dicker."""
+    spec = _obj(oid)
+    if spec.profile is None:
+        raise HTTPException(409, "Objekt hat noch kein Profil")
+    pr = spec.profile
+    L = float(pr.s[-1])
+    raw = profile.normalize_levels(body.levels, L, keep_ref=True)
+    m = min(q[2] for q in raw)
+    lv = [[a, b, round(z - m, 2)] for a, b, z in raw]
+    s_arr = np.asarray(pr.s)
+    pr.levels = lv
+    pr.bottom = profile.bottom_from_levels(s_arr, lv).tolist()
+    pr.top = (np.asarray(pr.top) - m).round(3).tolist()
+    if pr.measured:
+        pr.measured = (np.asarray(pr.measured) - m).round(2).tolist()
+    storage.save_object(spec)
+    return spec
+
+
 @router.post("/{oid}/profile", response_model=ObjectSpec)
 def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
     spec = _obj(oid)
@@ -316,30 +352,33 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
         raise HTTPException(422, f"Profil konnte nicht berechnet werden ({e}). Bitte die Umrisse prüfen.") from e
     ov = body.profile_overrides or {}
     s_grid = g.profile.s
-    if body.bottom_points:                                   # Handkorrektur der Unterseite
-        L = float(s_grid[-1])
-        # negative Höhen erlaubt (Punkt tiefer als der bisher tiefste); unten wird neu auf 0 bezogen
-        pts = [[min(max(float(a), 0.0), L), float(b)] for a, b in body.bottom_points]
+    L = float(s_grid[-1])
+    # verdeckte/ergänzte Stellen (Hand) zählen nicht für die Ebenen, inklusive eines Saums daneben
+    reliable = ~np.asarray(g.profile.missing, bool)
+    if g.profile.cut and not reliable.all():
+        from scipy.ndimage import binary_dilation
+        reliable &= ~binary_dilation(~reliable, iterations=int(round(15.0 / profile.DS)))   # Handreste
+    measured = np.asarray(g.profile.bottom, float)
+    zp = _level_ref(measured, reliable)       # Bezug: tiefster (gefilterter) Messpunkt = 0
+    if body.levels:                           # Handkorrektur, im selben Bezug wie Messung/Oberseite
+        raw = profile.normalize_levels([[a, b, z] for a, b, z in body.levels], L, keep_ref=True)
+        zp += min(q[2] for q in raw)          # tiefere Ebene = Werkzeug dort dicker: alles mitschieben
+        lv = profile.normalize_levels(raw, L)
     else:
-        pts = profile.bottom_points(s_grid, g.profile.bottom)
-    # gleicher Bezug für Ober- und Unterseite: tiefster Stützpunkt = 0
-    zp = min(p[1] for p in pts)
-    pts = [[round(p[0], 2), round(p[1] - zp, 2)] for p in pts]
-    b_arr = profile.bottom_from_points(s_grid, pts)
-    t_arr = profile.smooth_top(s_grid, np.asarray(g.profile.top) - zp, b_arr)
+        lv = profile.fit_levels(s_grid, measured, reliable, count=body.level_count)
+    b_arr = profile.bottom_from_levels(s_grid, lv)
+    meas = measured - zp
+    t_arr = profile.smooth_top(s_grid, np.asarray(g.profile.top) - zp, np.minimum(b_arr, meas))
     bottom, top = b_arr.tolist(), t_arr.tolist()
     for key, arr in (("bottom", bottom), ("top", top)):
         if key in ov:
             if len(ov[key]) != len(arr):
                 raise HTTPException(422, f"profile_overrides.{key}: Länge {len(arr)} erwartet")
             arr[:] = ov[key]
-    zmin = min(bottom)
-    bottom = [b - zmin for b in bottom]
-    top = [t - zmin for t in top]
     spec.contour_mm = g.contour.round(3).tolist()
     spec.length_mm, spec.width_mm = round(g.length, 2), round(g.width, 2)
     spec.profile = Profile(ds=0.5, s=g.profile.s.round(3).tolist(), bottom=bottom, top=top,
-                           bottom_points=sorted(pts))
+                           levels=lv, measured=np.round(meas, 2).tolist())
     spec.flip_lr_used = g.profile.flip_lr
     spec.tilt_deg = round(g.profile.tilt_deg, 2)
     spec.warnings = g.warnings

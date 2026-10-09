@@ -16,7 +16,9 @@ class Profile(BaseModel):
     s: list[float]
     bottom: list[float]   # Ruhelage: min(bottom) = 0 (aus bottom_points interpoliert, falls gesetzt)
     top: list[float]
-    bottom_points: list[list[float]] | None = None   # Stützpunkte [s, z] der Unterseite (editierbar)
+    bottom_points: list[list[float]] | None = None   # veraltet (Stützpunkte); ersetzt durch levels
+    levels: list[list[float]] | None = None          # Ebenen [a, b, z]: Taschenboden in Stufen (editierbar)
+    measured: list[float] | None = None              # gemessene Unterseite (nur Anzeige)
 
 
 class ObjectSpec(BaseModel):
@@ -57,6 +59,7 @@ class GripRecess(BaseModel):
     attach: int | None = Field(None, ge=0, le=11)   # an Platzierung gekoppelt: quer mittig, nur entlang der Achse
     s: float | None = Field(None, ge=-50, le=1000)   # Position entlang der Werkzeugachse (mm ab Ursprung)
     auto_length: bool = True                         # gekoppelt: Länge = Taschenbreite + 2 x Überstand
+    edge_r: float = Field(4.0, ge=0, le=15)          # Rundung der Oberkante (weicher Übergang)
 
 
 class Compartment(BaseModel):
@@ -65,7 +68,7 @@ class Compartment(BaseModel):
     w: float = Field(ge=1, le=600)
     l: float = Field(ge=1, le=600)
     radius: float = Field(3.0, ge=0, le=50)
-    depth: float = Field(15.0, ge=0.5, le=200)
+    depth: float | None = Field(15.0, ge=0.5, le=200)   # None = so tief wie möglich
     polygon: Annotated[list[Point2], Field(max_length=4000)] | None = None   # freie Form (automatische Kästen); sonst Rechteck x,y,w,l
     generated: bool = False                    # von 'Kästen erzeugen' angelegt (wird beim Neu-Erzeugen ersetzt)
 
@@ -89,6 +92,8 @@ class InsertSpec(BaseModel):
     grid_x: int | None = Field(None, ge=1, le=12)
     grid_y: int | None = Field(None, ge=1, le=12)
     height_u: int | None = Field(None, ge=1, le=30)
+    height_mm: float | None = Field(None, ge=10, le=250)    # feste Gesamthöhe inkl. Stapelrand (hat Vorrang)
+    sink: float = Field(0.65, ge=0.2, le=1.0)              # Werkzeug sinkt zu diesem Anteil seiner Dicke ein
     stacking_lip: bool = True
     magnets: bool = False
     clearance_xy: float = Field(1.5, ge=0, le=10)
@@ -100,10 +105,10 @@ class InsertSpec(BaseModel):
     max_zones: int = Field(8, ge=1, le=40)
     floor_min: float = Field(1.5, ge=0.4, le=20)
     min_wall: float = Field(1.6, ge=0.4, le=20)
-    smooth_mm: float = Field(1.5, ge=0, le=10)             # Glättung der Taschenkontur (kleine Zacken/Kerben verschwinden)
+    smooth_mm: float = Field(3.0, ge=0, le=10)             # Glättung der Taschenkontur (kleine Zacken/Kerben verschwinden)
     auto_center: bool = True           # Inhalt mittig in der Einlage ausrichten
     auto_grip: bool = True             # Greifmulde quer unter jedem Werkzeug erzeugen
-    grip_width: float = Field(16.0, ge=4, le=80)
+    grip_width: float = Field(20.0, ge=4, le=80)
     grip_overhang: float = Field(15.0, ge=0, le=100)        # Mulde ragt je Seite so weit über die Tasche hinaus
     grip_depth_below: float = Field(8.0, ge=0, le=100)
     auto_compartments: bool = False    # freie Flächen mit Kästen füllen

@@ -47,6 +47,7 @@ export const api = {
       { method: 'PUT', body: fd })
   },
   profile: (id: string, body: Record<string, unknown>) => req<ObjectSpec>(`/objects/${id}/profile`, json('POST', body)),
+  setLevels: (id: string, levels: [number, number, number][]) => req<ObjectSpec>(`/objects/${id}/levels`, json('PUT', { levels })),
 
   inserts: () => req<InsertSpec[]>('/inserts'),
   insert: (id: string) => req<InsertSpec>(`/inserts/${id}`),
@@ -60,6 +61,8 @@ export const api = {
     req<{ compartments: InsertSpec['compartments']; reason: string | null; grid: [number, number] }>(`/inserts/${spec.id}/auto-compartments`, json('POST', spec)),
   editCompartments: (spec: InsertSpec, op: 'merge' | 'split', indices: number[], parts = 2) =>
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/edit`, json('POST', { spec, op, indices, parts })),
+  compartmentAt: (spec: InsertSpec, x: number, y: number) =>
+    req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/at`, json('POST', { spec, x, y })),
 
   job: (id: string) => req<Job>(`/jobs/${id}`),
   buildBaseplate: (spec: BaseplateSpec) => req<{ job_id: string }>('/baseplates/build', json('POST', spec)),

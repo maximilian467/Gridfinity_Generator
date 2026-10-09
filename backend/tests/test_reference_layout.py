@@ -76,8 +76,17 @@ def test_smoothing_never_shrinks():
     o0 = pocket_outline(notch, 1.0, 0.0, 0.0)
     o1 = pocket_outline(notch, 1.0, 0.0, 1.5)
     assert o1.buffer(0.06).contains(raw.buffer(1.0, join_style=1))
-    assert len(o1.exterior.coords) < len(o0.exterior.coords)
     assert o1.area >= o0.area
+    # Kerbe geschlossen: oben an der Kerbe liegt die Kontur wieder auf voller Höhe
+    from shapely.geometry import LineString as _LS
+    cut = _LS([(51, 0), (51, 40)]).intersection(o1)
+    assert cut.bounds[3] >= 20.7
+    # glatt: kein Knick über 30° zwischen zwei Segmenten
+    import numpy as np
+    c = np.asarray(o1.exterior.coords)[:-1]
+    d = np.diff(np.vstack([c, c[:1]]), axis=0)
+    ang = np.degrees(np.abs(np.angle(np.exp(1j * (np.arctan2(d[:, 1], d[:, 0]) - np.roll(np.arctan2(d[:, 1], d[:, 0]), 1))))))
+    assert ang.max() < 30
 
 
 def test_center_off_keeps_positions():

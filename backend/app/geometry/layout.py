@@ -10,8 +10,8 @@ from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
 
 from ..schemas import Compartment, GripRecess, InsertSpec, ObjectSpec
-from .gridfinity import FOOT_H, LIP_MARGIN, PITCH, bin_outer, surface_z
-from .zones import Zone, compute_zones
+from .gridfinity import FOOT_H, LIP_H, LIP_MARGIN, PITCH, UNIT_H, bin_outer, surface_z
+from .zones import Zone, compute_zones, zones_from_levels
 
 
 @dataclass
@@ -27,11 +27,13 @@ class Grip:
     poly: object
     z0: float                       # tiefster Punkt der Mulde
     rounded: bool
-    radius: float                   # Rundungsradius (halbe Breite)
+    radius: float                   # halbe Breite (Öffnung oben)
     axis: LineString | Point        # Mittellinie (Stadion) bzw. Mittelpunkt (Kreis)
     auto: bool = False
     placement: int | None = None
     params: GripRecess | None = None      # automatische Mulde als übernehmbare Spec (vor Zentrierung)
+    edge_r: float = 4.0                   # Rundung der Oberkante
+    z_top: float = 0.0                    # Oberfläche der Einlage
 
 
 @dataclass
@@ -40,14 +42,17 @@ class Comp:
     z0: float
     radius: float
     auto: bool = False
+    free_depth: bool = False        # Tiefe folgt der Höhe (so tief wie möglich)
 
 
 @dataclass
 class Layout:
     grid_x: int
     grid_y: int
-    height_u: int
+    height_u: float
     z_surface: float
+    total_height: float = 0.0                          # inkl. Stapelrand
+    sink: list[float] = field(default_factory=list)    # je Platzierung: tatsächlicher Einsinkanteil
     pieces: list[Piece] = field(default_factory=list)
     grips: list[Grip] = field(default_factory=list)
     comps: list[Comp] = field(default_factory=list)
@@ -84,18 +89,44 @@ def _polys(g) -> list[Polygon]:
     return [p for p in getattr(g, "geoms", []) if isinstance(p, Polygon)]
 
 
+def _chaikin(ring: np.ndarray, n: int) -> np.ndarray:
+    for _ in range(n):
+        a, b = ring, np.roll(ring, -1, axis=0)
+        ring = np.empty((2 * len(a), 2))
+        ring[0::2], ring[1::2] = 0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b
+    return ring
+
+
+def smooth_outline(poly, smooth: float):
+    """Kontur als ruhige, glatte Linie: Kerben schließen, auf wenige Stützpunkte reduzieren,
+    Ecken als Kurve ausrunden (Chaikin). Danach so weit aufweiten, dass die Original-Kontur
+    vollständig innen liegt: die Tasche wird nie kleiner als nötig."""
+    import shapely
+
+    if smooth <= 0:
+        return poly
+    # Schließen = Kugel rollt von außen um die Kontur: Kerben und Zacken werden überbrückt
+    closed = poly.buffer(smooth, join_style=1).buffer(-smooth, join_style=1)
+    parts = _polys(closed)
+    if not parts:
+        return poly
+    p = shapely.segmentize(max(parts, key=lambda q: q.area).simplify(0.05), 1.0)
+    ring = np.asarray(p.exterior.coords)[:-1]
+    if len(ring) < 4:
+        return poly
+    sm = Polygon(_chaikin(ring, 2)).buffer(0)          # Facetten der Kreisbögen weich ausrunden
+    return sm.union(poly) if not sm.contains(poly) else sm
+
+
 def pocket_outline(contour: list[list[float]], cxy: float, cend: float, smooth: float = 0.0):
-    """Taschenkontur: Kontur glätten (nur Schließen, d. h. die Tasche wird nie kleiner als das
-    Werkzeug), Spiel als runder Offset, Längszugabe als Minkowski-Summe mit einer Strecke."""
+    """Taschenkontur: Spiel als runder Offset, Längszugabe als Minkowski-Summe mit einer Strecke,
+    danach glätten (nie kleiner als Werkzeug + Spiel)."""
     poly = Polygon(contour).buffer(0)
-    if smooth > 0:
-        poly = poly.buffer(smooth, join_style=1).buffer(-smooth, join_style=1)
-        poly = poly.union(Polygon(contour).buffer(0))          # Sicherheit: nie kleiner als das Original
     b = poly.buffer(cxy, join_style=1)
     n = 9 if cend > 0 else 1
     shifts = [-cend + 2 * cend * i / (n - 1) for i in range(n)] if n > 1 else [0.0]
-    o = unary_union([affinity.translate(b, dx, 0) for dx in shifts])
-    return o.simplify(0.05)
+    o = unary_union([affinity.translate(b, dx, 0) for dx in shifts]).simplify(0.05)
+    return smooth_outline(o, smooth).simplify(0.03)
 
 
 def _stadium_axis(g: GripRecess) -> LineString:
@@ -162,25 +193,67 @@ def _make_grip(g: GripRecess, pieces: list[Piece], zmin_all: float, auto=False, 
     touched = [p.z0 for p in pieces if p.poly.intersects(gp)]
     z0 = (min(touched) if touched else zmin_all) - g.depth_below
     axis = Point(g.x, g.y) if g.shape == "circle" else _stadium_axis(g)
-    return Grip(gp, z0, g.rounded and g.shape != "rect", g.w / 2, axis, auto, placement, g if auto else None)
+    return Grip(gp, z0, g.rounded and g.shape != "rect", g.w / 2, axis, auto, placement, g if auto else None,
+                edge_r=g.edge_r)
 
 
-def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int, u: int) -> Layout:
+def tool_depth(obj: ObjectSpec, spec: InsertSpec) -> tuple[float, float]:
+    """Wie tief die tiefste Stelle des Werkzeugs unter der Oberfläche liegt (ohne Bodenabstand):
+    Einsinkanteil x Werkzeugdicke, mindestens so, dass jede Ebene 1 mm Tasche behält.
+    Rückgabe (Tiefe, kleinste sinnvolle Tiefe)."""
+    prof = obj.profile
+    T = max(prof.top)
+    zmax = max((lv[2] for lv in prof.levels), default=0.0) if prof.levels else 0.0
+    dmin = min(zmax + 1.0, T)
+    return max(spec.sink * T, dmin), dmin
+
+
+def _rock_warning(obj: ObjectSpec) -> str | None:
+    """Liegt das Werkzeug beiderseits seines Schwerpunkts auf? Sonst kann es wippen."""
+    prof = obj.profile
+    if not prof.measured or not prof.levels or len(prof.measured) != len(prof.s):
+        return None
+    s = np.asarray(prof.s)
+    meas = np.asarray(prof.measured)
+    floor = np.asarray(prof.bottom)
+    ok = ~np.asarray(obj.profile_missing, bool) if len(obj.profile_missing) == len(s) else np.ones(len(s), bool)
+    touch = s[ok & (meas - floor < 0.8)]
+    if len(touch) < 2:
+        return None
+    sb = balance_point(obj)
+    L = obj.length_mm
+    if not (touch.min() < sb - 0.1 * L and touch.max() > sb + 0.1 * L):
+        return (f"{obj.name}: liegt nur auf einer Seite des Schwerpunkts auf und kann wippen. "
+                "Im Seitenprofil die Ebenen prüfen (Ebene unter dem aufliegenden Teil tiefer setzen).")
+    return None
+
+
+def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int, u: float,
+              reduce: float = 0.0) -> Layout:
+    """reduce: Tiefe, um die alle Werkzeuge flacher eingesetzt werden (feste Gesamthöhe)."""
     zs = surface_z(u)
-    lay = Layout(gx, gy, u, zs)
+    lay = Layout(gx, gy, u, zs, total_height=zs + (LIP_H if spec.stacking_lip else 0.0))
     margin = spec.clearance_xy + spec.clearance_end
     auto_grips: list[tuple[GripRecess, int]] = []
     outlines: dict[int, object] = {}
     for pi, pl in enumerate(spec.placements):
         obj = objects[pl.object_id]
         prof = obj.profile
-        zones = compute_zones(prof.s, prof.bottom, obj.length_mm, margin, spec.step_tol,
-                              spec.min_zone_len, spec.max_zones, prof.ds)
+        if prof.levels:
+            zones = zones_from_levels(prof.levels, obj.length_mm, margin)
+        else:                       # ältere Objekte ohne Ebenen
+            zones = compute_zones(prof.s, prof.bottom, obj.length_mm, margin, spec.step_tol,
+                                  spec.min_zone_len, spec.max_zones, prof.ds)
         lay.zones.append(zones)
         outline = pocket_outline(obj.contour_mm, spec.clearance_xy, spec.clearance_end, spec.smooth_mm)
         outlines[pi] = outline
-        T = max(prof.top)
-        z_rest = zs - T + spec.overhang
+        D, dmin = tool_depth(obj, spec)
+        D = max(D - reduce, dmin)
+        lay.sink.append(D / max(max(prof.top), 1e-6))
+        z_rest = zs - D + spec.overhang
+        w = _rock_warning(obj)
+        if w and w not in lay.warnings:
+            lay.warnings.append(w)
         for zi, z in enumerate(zones):
             piece = outline.intersection(box(z.a - 0.05, -1e4, z.b + 0.05, 1e4))
             if piece.is_empty:
@@ -205,8 +278,13 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
             g = g.model_copy(update={"x": c.x, "y": c.y, "rot_deg": pl.rot_deg, "s": sg,
                                      "l": L if g.auto_length else g.l})
         lay.grips.append(_make_grip(g, lay.pieces, zmin_all))
+    need = FOOT_H + spec.floor_min
     for c in spec.compartments:
-        lay.comps.append(Comp(comp_polygon(c), zs - c.depth, c.radius))
+        # ohne Tiefe: so tief wie möglich (folgt der Einlagenhöhe)
+        lay.comps.append(Comp(comp_polygon(c), need if c.depth is None else zs - c.depth, c.radius,
+                              free_depth=c.depth is None))
+    for g in lay.grips:
+        g.z_top = zs
     return lay
 
 
@@ -239,18 +317,24 @@ def _center(lay: Layout) -> None:
 
 
 def _min_floor(lay: Layout) -> float:
-    zs = [p.z0 for p in lay.pieces] + [g.z0 for g in lay.grips] + [c.z0 for c in lay.comps if not c.auto]
+    zs = [p.z0 for p in lay.pieces] + [g.z0 for g in lay.grips] \
+        + [c.z0 for c in lay.comps if not c.auto and not c.free_depth]
     return min(zs, default=1e9)
 
 
+def _min_tool_floor(lay: Layout) -> float:
+    return min([p.z0 for p in lay.pieces] + [g.z0 for g in lay.grips], default=1e9)
+
+
 def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
-    # Rastergröße
+    # Rastergröße: nur Taschen und Mulden zählen. Kästen füllen die Restfläche; zählten sie mit,
+    # würde jedes Erzeugen von Kästen das Raster um ein Feld wachsen lassen.
     gx, gy = spec.grid_x, spec.grid_y
     if gx is None or gy is None:
-        probe = _assemble(spec, objects, 1, 1, 1)
-        u = _content(probe)
-        if u is not None:
-            x0, y0, x1, y1 = u.bounds
+        probe = _assemble(spec.model_copy(update={"compartments": []}), objects, 1, 1, 1)
+        polys = [p.poly for p in probe.pieces] + [g.poly for g in probe.grips]
+        if polys:
+            x0, y0, x1, y1 = unary_union(polys).bounds
             if spec.auto_center:       # nur die Größe zählt
                 need_x, need_y = (x1 - x0), (y1 - y0)
             else:
@@ -263,7 +347,17 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
         gy = gy or max(ay, 1)
     # Höhe
     need = FOOT_H + spec.floor_min
-    if spec.height_u is None:
+    if spec.height_mm is not None:
+        # feste Gesamthöhe (inkl. Stapelrand): passt das Werkzeug nicht, sitzt es flacher
+        u = max((spec.height_mm - (LIP_H if spec.stacking_lip else 0.0)) / UNIT_H, 1.0)
+        lay = _assemble(spec, objects, gx, gy, u)
+        short = need - _min_tool_floor(lay)
+        if short > 1e-6 and spec.placements:
+            lay = _assemble(spec, objects, gx, gy, u, reduce=short)
+            sink = min(lay.sink) if lay.sink else 0
+            lay.warnings.append(f"Für {spec.height_mm:.0f} mm Gesamthöhe sitzen die Werkzeuge flacher "
+                                f"(nur {sink * 100:.0f} % eingesunken).")
+    elif spec.height_u is None:
         for u_ in range(1, 31):
             lay = _assemble(spec, objects, gx, gy, u_)
             if _min_floor(lay) >= need:
@@ -273,7 +367,8 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
     if spec.auto_center:
         _center(lay)
     if _min_floor(lay) < need - 1e-6:
-        lay.warnings.append(f"Tiefster Boden {_min_floor(lay):.1f} mm < Mindest {need:.2f} mm: Einlage höher wählen")
+        lay.warnings.append(f"Tiefster Boden {_min_floor(lay):.1f} mm < Mindest {need:.2f} mm: "
+                            "Einlage höher wählen oder Fächer flacher machen")
     if spec.auto_compartments:
         for poly in auto_compartments(lay, spec):
             depth = spec.comp_depth if spec.comp_depth else lay.z_surface - need

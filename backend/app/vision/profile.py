@@ -329,6 +329,138 @@ def bottom_from_points(s, points) -> np.ndarray:
     return z - z.min()
 
 
+# ---- Unterseite als wenige Ebenen (Taschenboden in Stufen) ---------------------------------
+
+def _gap_costs(z: np.ndarray, min_n: int) -> tuple[np.ndarray, np.ndarray]:
+    """cost[i, j] = Luft unter dem Werkzeug, wenn der Boden im Abschnitt [i, j) auf dessen
+    tiefstem Punkt liegt (Summe z - min). lvl[i, j] = dieser tiefste Punkt."""
+    n = len(z)
+    cost = np.full((n + 1, n + 1), np.inf)
+    lvl = np.zeros((n + 1, n + 1))
+    for i in range(n):
+        m, acc = np.inf, 0.0
+        for j in range(i + 1, n + 1):
+            m = min(m, z[j - 1])
+            acc += z[j - 1]
+            if j - i >= min_n:
+                cost[i, j] = acc - (j - i) * m
+                lvl[i, j] = m
+    return cost, lvl
+
+
+def _segment(cost: np.ndarray, k: int) -> tuple[float, list[int]]:
+    n = cost.shape[0] - 1
+    best = np.full((k + 1, n + 1), np.inf)
+    arg = np.zeros((k + 1, n + 1), int)
+    best[0, 0] = 0.0
+    for kk in range(1, k + 1):
+        for j in range(1, n + 1):
+            c = best[kk - 1, :j] + cost[:j, j]
+            i = int(np.argmin(c))
+            best[kk, j], arg[kk, j] = c[i], i
+    if not np.isfinite(best[k, n]):
+        return np.inf, []
+    cuts, j = [n], n
+    for kk in range(k, 0, -1):
+        j = arg[kk, j]
+        cuts.append(j)
+    return float(best[k, n]), cuts[::-1]
+
+
+def fit_levels(s, bottom, reliable=None, count: int | None = None, max_levels: int = 5,
+               min_len: float = 10.0) -> list[list[float]]:
+    """Unterseite durch wenige waagrechte Ebenen ersetzen (Zange: Backen, Griffschutz, Griffe).
+
+    Jede Ebene liegt auf dem tiefsten Punkt des Werkzeugs in ihrem Abschnitt: das Werkzeug liegt
+    so auf allen Ebenen auf und kann nicht wippen. Die Abschnittsgrenzen werden so gelegt, dass
+    möglichst wenig Luft unter dem Werkzeug bleibt (Rampen landen in der tieferen Ebene).
+    reliable: Maske der verlässlichen Spalten (verdeckte/ergänzte Stellen zählen nicht).
+    count: feste Anzahl Ebenen, sonst automatisch (1..max_levels).
+    Rückgabe [[a, b, z], ...] lückenlos von 0 bis L, tiefste Ebene z = 0."""
+    from scipy.ndimage import median_filter
+    s = np.asarray(s, float)
+    z = median_filter(np.asarray(bottom, float), size=9, mode="nearest")     # ±2 mm Pixelrauschen
+    ok = np.ones(len(s), bool) if reliable is None else np.asarray(reliable, bool)
+    if ok.sum() < 10:
+        ok = np.ones(len(s), bool)
+    step = max(1, int(round(1.0 / max(s[1] - s[0], 1e-6))))                 # 1-mm-Raster für die Suche
+    idx = np.nonzero(ok)[0][::step]
+    ss, zz = s[idx], z[idx]
+    L = float(s[-1])
+    min_n = max(2, int(round(min_len / max(ss[1] - ss[0], 1e-6)))) if len(ss) > 1 else 1
+    cost, lvl = _gap_costs(zz, min_n)
+    kmax = max(1, min(max_levels, len(zz) // min_n))
+    sols = {k: _segment(cost, k) for k in range(1, kmax + 1)}
+    if count:
+        k = min(count, kmax)
+        while k > 1 and not sols[k][1]:
+            k -= 1
+    else:
+        span = max(float(ss[-1] - ss[0]), 1.0)
+        gap = {k: sols[k][0] / len(zz) for k in sols if sols[k][1]}   # mittlere Luft unter dem Werkzeug
+        k = 1
+        while k + 1 in gap and gap[k] > 0.6 and gap[k] - gap[k + 1] > 0.25 * (span / 150):
+            k += 1
+    cuts = sols[k][1]
+    levels = []
+    for a, b in zip(cuts[:-1], cuts[1:]):
+        sa = 0.0 if a == 0 else float((ss[a - 1] + ss[a]) / 2)
+        sb = L if b == len(ss) else float((ss[b - 1] + ss[b]) / 2)
+        levels.append([sa, sb, float(lvl[a, b])])
+    if not count:                       # feste Anzahl gewünscht: nichts zusammenlegen
+        levels = _tidy_levels(levels, L)
+    zmin = min(lv[2] for lv in levels)
+    return [[round(a, 1), round(b, 1), round(zv - zmin, 2)] for a, b, zv in levels]
+
+
+def _tidy_levels(levels: list[list[float]], L: float, min_step: float = 0.8) -> list[list[float]]:
+    """Fast gleich hohe Nachbarn verbinden (tiefere Ebene gewinnt), kurze hohe Enden entfernen
+    (z. B. Rest der Hand am Bildrand: dort ginge der Boden sonst sinnlos wieder hoch)."""
+    out = [list(lv) for lv in levels]
+    changed = True
+    while changed and len(out) > 1:
+        changed = False
+        for i in range(len(out) - 1):
+            if abs(out[i][2] - out[i + 1][2]) < min_step:
+                out[i] = [out[i][0], out[i + 1][1], min(out[i][2], out[i + 1][2])]
+                del out[i + 1]
+                changed = True
+                break
+        for i in (0, len(out) - 1):
+            if len(out) < 2:
+                break
+            j = 1 if i == 0 else len(out) - 2
+            if out[i][1] - out[i][0] < 0.15 * L and out[i][2] > out[j][2]:
+                a, b = min(out[i][0], out[j][0]), max(out[i][1], out[j][1])
+                out[j] = [a, b, out[j][2]]
+                del out[i]
+                changed = True
+                break
+    return out
+
+
+def normalize_levels(levels, L: float, keep_ref: bool = False) -> list[list[float]]:
+    """Von Hand bearbeitete Ebenen säubern: sortiert, lückenlos 0..L, tiefste Ebene = 0
+    (keep_ref: Höhen unverändert lassen)."""
+    lv = sorted(([float(a), float(b), float(z)] for a, b, z in levels), key=lambda q: q[0])
+    lv = [q for q in lv if q[1] > q[0]] or [[0.0, L, 0.0]]
+    lv[0][0] = 0.0
+    for i in range(1, len(lv)):
+        lv[i][0] = lv[i - 1][1] = min(max(lv[i][0], lv[i - 1][0] + 1.0), L)
+    lv[-1][1] = L
+    lv = [q for q in lv if q[1] - q[0] >= 0.5]
+    zmin = 0.0 if keep_ref else min(q[2] for q in lv)
+    return [[round(a, 1), round(b, 1), round(z - zmin, 2)] for a, b, z in lv]
+
+
+def bottom_from_levels(s, levels) -> np.ndarray:
+    s = np.asarray(s, float)
+    z = np.full(len(s), levels[-1][2], float)
+    for a, b, zv in reversed(levels):
+        z[(s >= a) & (s < b)] = zv
+    return z
+
+
 def smooth_top(s, top, bottom, window_mm: float = 3.0) -> np.ndarray:
     """Oberseite glätten (zählt nur für die Gesamtdicke), nie unter der Unterseite."""
     from scipy.ndimage import median_filter, uniform_filter1d
