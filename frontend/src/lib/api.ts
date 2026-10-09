@@ -57,7 +57,9 @@ export const api = {
   layout: (spec: InsertSpec) => req<LayoutOut>(`/inserts/${spec.id}/layout`, json('POST', spec)),
   build: (spec: InsertSpec) => req<{ job_id: string }>(`/inserts/${spec.id}/build`, json('POST', spec)),
   autoCompartments: (spec: InsertSpec) =>
-    req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/auto-compartments`, json('POST', spec)),
+    req<{ compartments: InsertSpec['compartments']; reason: string | null; grid: [number, number] }>(`/inserts/${spec.id}/auto-compartments`, json('POST', spec)),
+  editCompartments: (spec: InsertSpec, op: 'merge' | 'split', indices: number[], parts = 2) =>
+    req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/edit`, json('POST', { spec, op, indices, parts })),
 
   job: (id: string) => req<Job>(`/jobs/${id}`),
   buildBaseplate: (spec: BaseplateSpec) => req<{ job_id: string }>('/baseplates/build', json('POST', spec)),

@@ -14,8 +14,9 @@ Point2 = Annotated[list[float], Field(min_length=2, max_length=2)]
 class Profile(BaseModel):
     ds: float = 0.5
     s: list[float]
-    bottom: list[float]   # Ruhelage: min(bottom) = 0
+    bottom: list[float]   # Ruhelage: min(bottom) = 0 (aus bottom_points interpoliert, falls gesetzt)
     top: list[float]
+    bottom_points: list[list[float]] | None = None   # Stützpunkte [s, z] der Unterseite (editierbar)
 
 
 class ObjectSpec(BaseModel):
@@ -53,6 +54,9 @@ class GripRecess(BaseModel):
     rot_deg: Angle = 0.0
     depth_below: float = Field(10.0, ge=0, le=100)
     rounded: bool = True          # U-förmiger Boden (Finger gleitet unter das Werkzeug)
+    attach: int | None = Field(None, ge=0, le=11)   # an Platzierung gekoppelt: quer mittig, nur entlang der Achse
+    s: float | None = Field(None, ge=-50, le=1000)   # Position entlang der Werkzeugachse (mm ab Ursprung)
+    auto_length: bool = True                         # gekoppelt: Länge = Taschenbreite + 2 x Überstand
 
 
 class Compartment(BaseModel):

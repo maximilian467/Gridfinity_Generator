@@ -137,15 +137,20 @@ def balance_point(obj: ObjectSpec) -> float:
     return float((m * s).sum() / max(m.sum(), 1e-9))
 
 
-def auto_grip_for(obj: ObjectSpec, outline, spec: InsertSpec) -> GripRecess:
-    """Greifmulde quer unter dem Werkzeug am Schwerpunkt (objekt-lokale Koordinaten)."""
-    sg = balance_point(obj)
+def grip_across(outline, sg: float, width: float, overhang: float) -> tuple[float, float]:
+    """Quer zur Achse an Stelle sg: Mitte und Länge (Taschenbreite + 2 x Überstand)."""
     y0, y1 = outline.bounds[1] - 1, outline.bounds[3] + 1
     cut = LineString([(sg, y0), (sg, y1)]).intersection(outline)
     lo, hi = (cut.bounds[1], cut.bounds[3]) if not cut.is_empty else (-10.0, 10.0)
-    L = (hi - lo) + 2 * spec.grip_overhang
-    return GripRecess(shape="stadium", x=sg, y=(lo + hi) / 2, w=spec.grip_width, l=max(L, spec.grip_width),
-                      rot_deg=0.0, depth_below=spec.grip_depth_below, rounded=True)
+    return (lo + hi) / 2, max((hi - lo) + 2 * overhang, width)
+
+
+def auto_grip_for(obj: ObjectSpec, outline, spec: InsertSpec) -> GripRecess:
+    """Greifmulde quer unter dem Werkzeug am Schwerpunkt (objekt-lokale Koordinaten)."""
+    sg = balance_point(obj)
+    yc, L = grip_across(outline, sg, spec.grip_width, spec.grip_overhang)
+    return GripRecess(shape="stadium", x=sg, y=yc, w=spec.grip_width, l=L,
+                      rot_deg=0.0, depth_below=spec.grip_depth_below, rounded=True, s=round(sg, 1))
 
 
 def _place(geom, pl):
@@ -165,6 +170,7 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
     lay = Layout(gx, gy, u, zs)
     margin = spec.clearance_xy + spec.clearance_end
     auto_grips: list[tuple[GripRecess, int]] = []
+    outlines: dict[int, object] = {}
     for pi, pl in enumerate(spec.placements):
         obj = objects[pl.object_id]
         prof = obj.profile
@@ -172,6 +178,7 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
                               spec.min_zone_len, spec.max_zones, prof.ds)
         lay.zones.append(zones)
         outline = pocket_outline(obj.contour_mm, spec.clearance_xy, spec.clearance_end, spec.smooth_mm)
+        outlines[pi] = outline
         T = max(prof.top)
         z_rest = zs - T + spec.overhang
         for zi, z in enumerate(zones):
@@ -182,13 +189,21 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
         if spec.auto_grip:
             g = auto_grip_for(obj, outline, spec)
             c = _place(Point(g.x, g.y), pl)
-            auto_grips.append((g.model_copy(update={"x": c.x, "y": c.y, "rot_deg": pl.rot_deg}), pi))
+            auto_grips.append((g.model_copy(update={"x": c.x, "y": c.y, "rot_deg": pl.rot_deg, "attach": pi}), pi))
         if spec.overhang > 0 and pi == 0:
             lay.warnings.append("Überstand > 0: Einlage ist nicht stapelbar")
     zmin_all = min((p.z0 for p in lay.pieces), default=zs - 10)
     for g, pi in auto_grips:
         lay.grips.append(_make_grip(g, lay.pieces, zmin_all, auto=True, placement=pi))
     for g in spec.grip_recesses:
+        if g.attach is not None and g.attach < len(spec.placements) and g.attach in outlines:
+            pl = spec.placements[g.attach]
+            outline = outlines[g.attach]
+            sg = g.s if g.s is not None else balance_point(objects[pl.object_id])
+            yc, L = grip_across(outline, sg, g.w, spec.grip_overhang)
+            c = _place(Point(sg, yc), pl)
+            g = g.model_copy(update={"x": c.x, "y": c.y, "rot_deg": pl.rot_deg, "s": sg,
+                                     "l": L if g.auto_length else g.l})
         lay.grips.append(_make_grip(g, lay.pieces, zmin_all))
     for c in spec.compartments:
         lay.comps.append(Comp(comp_polygon(c), zs - c.depth, c.radius))
@@ -212,7 +227,10 @@ def _translate_layout(lay: Layout, dx: float, dy: float) -> None:
 
 
 def _center(lay: Layout) -> None:
-    u = _content(lay)
+    # Mitte nur aus Taschen und Mulden: Fächer füllen die Restfläche und wandern nur mit
+    # (sonst verschiebt jedes erzeugte Fach die Mitte und damit alle anderen Fächer)
+    polys = [p.poly for p in lay.pieces] + [g.poly for g in lay.grips]
+    u = unary_union(polys) if polys else _content(lay)
     if u is None:
         return
     x0, y0, x1, y1 = u.bounds

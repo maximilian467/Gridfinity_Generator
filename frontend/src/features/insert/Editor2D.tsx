@@ -32,9 +32,9 @@ function centroid(p: PolyOut): [number, number] {
 
 /** Draufsicht der Einlage im mm-Maßstab. Positionen in der Spec gelten vor der automatischen
  *  Zentrierung; das Layout liefert die Verschiebung (shift) mit. */
-export function Editor2D({ spec, layout, sel, onSelect, onMove }: {
+export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [] }: {
   spec: InsertSpec; layout: LayoutOut | undefined; objects?: Record<string, ObjectSpec>
-  sel: Sel; onSelect: (s: Sel) => void
+  sel: Sel; onSelect: (s: Sel, additive?: boolean) => void; selectedComps?: number[]
   onMove: (s: NonNullable<Sel>, x: number, y: number) => void
 }) {
   const tk = useTokens()
@@ -61,7 +61,10 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove }: {
   const manualComps = layout?.compartments.filter((c) => !c.auto) ?? []
   const autoComps = layout?.compartments.filter((c) => c.auto) ?? []
 
+  const attachedRot = (g: InsertSpec['grip_recesses'][number]) =>
+    g.attach != null && spec.placements[g.attach] ? spec.placements[g.attach].rot_deg : null
   const dragEnd = (s: NonNullable<Sel>) => (e: any) => {
+    e.target.setAttr('startAbs', null)
     const x = (e.target.x() - left) / k - sx, y = OY - (e.target.y() - PAD) / k - sy
     onMove(s, Math.round(x * 10) / 10, Math.round(y * 10) / 10)
   }
@@ -126,11 +129,20 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove }: {
 
           {/* manuelle Greifmulden */}
           {layout && spec.grip_recesses.map((g, gi) => {
-            const ox = g.x + sx, oy = g.y + sy
             const lg = manualGrips[gi]
+            const c0 = g.attach != null && lg?.polygons[0] ? centroid(lg.polygons[0]) : null
+            const ox = c0 ? c0[0] : g.x + sx, oy = c0 ? c0[1] : g.y + sy
             const act = sel?.kind === 'grip' && sel.index === gi
             return (
               <Group key={'g' + gi} x={px(ox)} y={py(oy)} draggable
+                dragBoundFunc={attachedRot(g) === null ? undefined : function (this: any, pos) {
+                  // nur entlang der Werkzeugachse (Bildschirm-y zeigt nach unten)
+                  const a = (attachedRot(g)! * Math.PI) / 180, dx = Math.cos(a), dy = -Math.sin(a)
+                  const st = this.getAttr('startAbs') ?? this.getAbsolutePosition()
+                  const t = (pos.x - st.x) * dx + (pos.y - st.y) * dy
+                  return { x: st.x + t * dx, y: st.y + t * dy }
+                }}
+                onDragStart={(e) => (e.target as any).setAttr('startAbs', e.target.getAbsolutePosition())}
                 onMouseDown={() => onSelect({ kind: 'grip', index: gi })} onDragEnd={dragEnd({ kind: 'grip', index: gi })}>
                 <Polys polys={lg?.polygons ?? []} ox={ox} oy={oy} k={k} fill={alpha(tk.blue, 0.32)}
                   stroke={act ? tk.accent : tk.blue} width={act ? 2.5 : 1.25} />
@@ -143,10 +155,11 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove }: {
           {layout && spec.compartments.map((c, ci) => {
             const ox = c.x + sx, oy = c.y + sy
             const lc = manualComps[ci]
-            const act = sel?.kind === 'comp' && sel.index === ci
+            const act = selectedComps.includes(ci) || (sel?.kind === 'comp' && sel.index === ci)
             return (
-              <Group key={'c' + ci} x={px(ox)} y={py(oy)} draggable
-                onMouseDown={() => onSelect({ kind: 'comp', index: ci })} onDragEnd={dragEnd({ kind: 'comp', index: ci })}>
+              <Group key={'c' + ci} x={px(ox)} y={py(oy)} draggable={!c.generated}
+                onMouseDown={(e) => onSelect({ kind: 'comp', index: ci }, e.evt.shiftKey || e.evt.ctrlKey || e.evt.metaKey)}
+                onDragEnd={dragEnd({ kind: 'comp', index: ci })}>
                 <Polys polys={lc?.polygons ?? []} ox={ox} oy={oy} k={k} fill={alpha(tk.green, 0.3)}
                   stroke={act ? tk.accent : tk.green} width={act ? 2.5 : 1.25} />
                 {lc?.polygons[0] && label(...centroid(lc.polygons[0]), c.depth.toFixed(0), ox, oy)}

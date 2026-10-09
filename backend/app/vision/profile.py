@@ -274,3 +274,65 @@ def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, si
         prof.missing = np.zeros(len(grid), bool)
         prof.s = grid
     return ObjectGeometry(contour, L, W, prof, warns)
+
+
+# ---- Unterseite als Stützpunkte -----------------------------------------------------------
+
+def _rdp(pts: np.ndarray, eps: float) -> list[int]:
+    """Douglas-Peucker: Indizes der behaltenen Punkte."""
+    def rec(i: int, j: int, out: list[int]) -> None:
+        a, b = pts[i], pts[j]
+        d = b - a
+        L = float(np.hypot(*d)) or 1e-9
+        seg = pts[i + 1:j]
+        if len(seg) == 0:
+            return
+        dist = np.abs(d[0] * (seg[:, 1] - a[1]) - d[1] * (seg[:, 0] - a[0])) / L
+        k = int(np.argmax(dist))
+        if dist[k] > eps:
+            m = i + 1 + k
+            rec(i, m, out)
+            out.append(m)
+            rec(m, j, out)
+    out = [0]
+    rec(0, len(pts) - 1, out)
+    out.append(len(pts) - 1)
+    return sorted(set(out))
+
+
+def bottom_points(s, bottom, max_points: int = 12, min_points: int = 5) -> list[list[float]]:
+    """Unterseite auf wenige Stützpunkte reduzieren (Startwert für die Handkorrektur).
+    Erst leicht glätten (Pixelrauschen), dann Douglas-Peucker mit wachsender Toleranz."""
+    s = np.asarray(s, float)
+    z = np.asarray(bottom, float)
+    from scipy.ndimage import median_filter
+    z = median_filter(z, size=7, mode="nearest")
+    pts = np.column_stack([s, z])
+    eps = 0.3
+    idx = _rdp(pts, eps)
+    while len(idx) > max_points and eps < 20:
+        eps *= 1.3
+        idx = _rdp(pts, eps)
+    if len(idx) < min_points:                      # gleichmäßig ergänzen, damit man etwas zum Greifen hat
+        extra = np.linspace(0, len(s) - 1, min_points).astype(int)
+        idx = sorted(set(idx) | set(int(i) for i in extra))
+    out = [[round(float(s[i]), 2), round(max(0.0, float(z[i])), 2)] for i in idx]
+    zmin = min(p[1] for p in out)
+    return [[p[0], round(p[1] - zmin, 2)] for p in out]
+
+
+def bottom_from_points(s, points) -> np.ndarray:
+    pts = sorted((float(a), float(b)) for a, b in points)
+    xs = np.array([p[0] for p in pts])
+    zs = np.array([p[1] for p in pts])
+    z = np.interp(np.asarray(s, float), xs, zs)
+    return z - z.min()
+
+
+def smooth_top(s, top, bottom, window_mm: float = 3.0) -> np.ndarray:
+    """Oberseite glätten (zählt nur für die Gesamtdicke), nie unter der Unterseite."""
+    from scipy.ndimage import median_filter, uniform_filter1d
+    t = np.asarray(top, float)
+    n = max(3, int(round(window_mm / DS)) | 1)
+    t = uniform_filter1d(median_filter(t, size=n, mode="nearest"), n, mode="nearest")
+    return np.maximum(t, np.asarray(bottom, float) + 0.5)

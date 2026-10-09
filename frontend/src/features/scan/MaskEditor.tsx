@@ -5,6 +5,11 @@ import { api, type SegmentResult } from '../../lib/api'
 import type { PhotoMeta } from '../../lib/types'
 import { BusyBar, Check, Msg, errText } from '../../components/ui'
 
+/** Zeiger festhalten (wirft bei manchen Eingabegeräten/synthetischen Ereignissen) */
+function capture(e: React.PointerEvent) {
+  try { (e.target as Element).setPointerCapture(e.pointerId) } catch { /* egal */ }
+}
+
 type Mode = 'points' | 'pos' | 'neg' | 'brush' | 'erase'
 const PX_PER_MM_VIEW = 5   // entzerrtes Anzeigebild: 0.5 * 10 px/mm
 
@@ -249,7 +254,7 @@ export function MaskEditor({ oid, view, photo, hasTopMask, onMaskChanged, onBusy
       snapshot()
       if (h.kind === 'edge') { poly.current = [...poly.current.slice(0, h.i + 1), [p[0], p[1]], ...poly.current.slice(h.i + 1)]; dragIdx.current = h.i + 1 }
       else dragIdx.current = h.i
-      ;(e.target as Element).setPointerCapture(e.pointerId)
+      ;capture(e)
       redraw()
       return
     }
@@ -260,7 +265,7 @@ export function MaskEditor({ oid, view, photo, hasTopMask, onMaskChanged, onBusy
       setPos(np); setNeg(nn); void runSegment(np, nn)
       return
     }
-    ;(e.target as Element).setPointerCapture(e.pointerId)
+    ;capture(e)
     snapshot(); painting.current = true; last.current = p; stroke(p, p); redraw()
   }
   const move = (e: React.PointerEvent) => {

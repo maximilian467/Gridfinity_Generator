@@ -87,3 +87,32 @@ def test_center_off_keeps_positions():
     lay = compute_layout(spec, {"pliers": o})
     assert lay.shift == (0.0, 0.0)
     assert lay.pocket_union().bounds[0] == pytest.approx(10 - 2.5, abs=0.3)
+
+
+def test_attached_grip_slides_along_axis_and_stays_centered():
+    from app.schemas import GripRecess
+    o = synthetic_pliers()
+    res = []
+    for s_ in (40.0, 120.0):
+        spec = InsertSpec(grid_x=3, grid_y=5, auto_grip=False, placements=[Placement(object_id="p", rot_deg=90)],
+                          grip_recesses=[GripRecess(x=0, y=0, w=16, attach=0, s=s_)])
+        lay = compute_layout(spec, {"p": o})
+        gb, pb = lay.grips[0].poly.bounds, lay.pocket_union().bounds
+        res.append(((gb[1] + gb[3]) / 2, (gb[0] + gb[2]) / 2, (pb[0] + pb[2]) / 2))
+    assert res[1][0] - res[0][0] == pytest.approx(80, abs=0.5)        # entlang der Achse verschoben
+    for _, gx, px in res:
+        assert gx == pytest.approx(px, abs=0.5)                        # quer mittig
+
+
+def test_bottom_points_and_polyline():
+    import numpy as np
+    from app.vision.profile import bottom_from_points, bottom_points
+    s = np.arange(0, 160.5, 0.5)
+    z = np.where(s < 60, 3.0, np.where(s < 75, 0.0, 2.0)) + np.random.default_rng(0).normal(0, 0.1, s.size)
+    pts = bottom_points(s, z)
+    assert 5 <= len(pts) <= 12
+    b = bottom_from_points(s, pts)
+    assert abs(b[int(67 / 0.5)] - 0) < 0.3 and abs(b[int(30 / 0.5)] - 3) < 0.4
+    # Gerade zwischen zwei Punkten: keine Delle
+    b2 = bottom_from_points(s, [[0, 2], [80, 0], [160, 2]])
+    assert b2[int(40 / 0.5)] == pytest.approx(1.0, abs=0.01)

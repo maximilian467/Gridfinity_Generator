@@ -94,6 +94,7 @@ class ProfileBody(BaseModel):
     side_flip_lr: bool | None = None
     side_flip_ud: bool | None = None
     calipers: dict[str, Annotated[float, Field(ge=0, le=2000)]] | None = Field(None, max_length=4)
+    bottom_points: Annotated[list[Pt], Field(min_length=2, max_length=60)] | None = None
     profile_overrides: dict[str, Annotated[list[float], Field(max_length=20000)]] | None = Field(None, max_length=2)
 
 
@@ -216,7 +217,8 @@ def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, 
         poly = contour.mask_to_polygon(mask, fill_holes)
         info["contour_px"] = (a4.mm_to_rect_px(np.asarray(poly.exterior.coords)) * VIEW_SCALE).round(1).tolist()
         # wenige, gut ziehbare Punkte für den Punkte-Editor (Abweichung <= 0,4 mm)
-        edit = np.asarray(poly.simplify(0.4).exterior.coords)[:-1]
+        # Seitenansicht ruhiger (nur die Dicke zählt), Draufsicht genauer (Taschenkontur)
+        edit = np.asarray(poly.simplify(0.8 if view == "side" else 0.4).exterior.coords)[:-1]
         ph["edit_contour_px"] = (a4.mm_to_rect_px(edit) * VIEW_SCALE).round(1).tolist()
         info["edit_contour_px"] = ph["edit_contour_px"]
         info["area_mm2"] = poly.area
@@ -248,9 +250,11 @@ def run_segment(oid: str, view: str, body: SegmentBody) -> dict:
     hand = np.zeros_like(mask) if view == "side" else None
     ph.pop("cut_point_mm", None)
     top_mask_f = storage.object_dir(oid) / "top_mask.png"
-    if view == "side" and body.remove_hand and top_mask_f.exists() and "top" in spec.photos:
-        res = hands.remove_hand(rect, mask, _rect_of(spec, "top"), cv2.imread(str(top_mask_f), cv2.IMREAD_GRAYSCALE))
-        if res.applied:
+    if view == "side" and body.remove_hand and (segment.sam_available() or (top_mask_f.exists() and "top" in spec.photos)):
+        res = hands.find_hand_sam(rect, mask)            # Hand über den Blattrand finden (farbunabhängig)
+        if res is None and top_mask_f.exists() and "top" in spec.photos:   # Rückfallebene: Farbmodell
+            res = hands.remove_hand(rect, mask, _rect_of(spec, "top"), cv2.imread(str(top_mask_f), cv2.IMREAD_GRAYSCALE))
+        if res is not None and res.applied:
             mask, hand = res.mask, res.hand
             # Berührungspunkt Hand/Werkzeug (Papier-mm) -> verdecktes Ende fürs Profil
             near = cv2.dilate(mask, np.ones((61, 61), np.uint8)) > 0
@@ -311,7 +315,19 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
     except (ValueError, IndexError) as e:
         raise HTTPException(422, f"Profil konnte nicht berechnet werden ({e}). Bitte die Umrisse prüfen.") from e
     ov = body.profile_overrides or {}
-    bottom, top = g.profile.bottom.tolist(), g.profile.top.tolist()
+    s_grid = g.profile.s
+    if body.bottom_points:                                   # Handkorrektur der Unterseite
+        L = float(s_grid[-1])
+        # negative Höhen erlaubt (Punkt tiefer als der bisher tiefste); unten wird neu auf 0 bezogen
+        pts = [[min(max(float(a), 0.0), L), float(b)] for a, b in body.bottom_points]
+    else:
+        pts = profile.bottom_points(s_grid, g.profile.bottom)
+    # gleicher Bezug für Ober- und Unterseite: tiefster Stützpunkt = 0
+    zp = min(p[1] for p in pts)
+    pts = [[round(p[0], 2), round(p[1] - zp, 2)] for p in pts]
+    b_arr = profile.bottom_from_points(s_grid, pts)
+    t_arr = profile.smooth_top(s_grid, np.asarray(g.profile.top) - zp, b_arr)
+    bottom, top = b_arr.tolist(), t_arr.tolist()
     for key, arr in (("bottom", bottom), ("top", top)):
         if key in ov:
             if len(ov[key]) != len(arr):
@@ -322,7 +338,8 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
     top = [t - zmin for t in top]
     spec.contour_mm = g.contour.round(3).tolist()
     spec.length_mm, spec.width_mm = round(g.length, 2), round(g.width, 2)
-    spec.profile = Profile(ds=0.5, s=g.profile.s.round(3).tolist(), bottom=bottom, top=top)
+    spec.profile = Profile(ds=0.5, s=g.profile.s.round(3).tolist(), bottom=bottom, top=top,
+                           bottom_points=sorted(pts))
     spec.flip_lr_used = g.profile.flip_lr
     spec.tilt_deg = round(g.profile.tilt_deg, 2)
     spec.warnings = g.warnings

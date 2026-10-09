@@ -93,3 +93,30 @@ def test_demo_object_and_insert_crud():
     assert dup["id"] != ins["id"]
     assert client.delete(f"/api/inserts/{ins['id']}").json()["ok"]
     assert client.get(f"/api/inserts/{ins['id']}").status_code == 404
+
+
+def test_compartments_merge_split_and_reason():
+    from shapely.geometry import Polygon
+    demo = client.post("/api/objects/demo").json()
+    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False,
+                                            "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
+    spec = dict(ins)
+    r = client.post(f"/api/inserts/{ins['id']}/auto-compartments", json=spec).json()
+    assert r["compartments"] and r["reason"] is None
+    spec["compartments"] = r["compartments"]
+    sp = client.post(f"/api/inserts/{ins['id']}/compartments/edit",
+                     json={"spec": spec, "op": "split", "indices": [0], "parts": 2}).json()
+    assert len(sp["compartments"]) == len(r["compartments"]) + 1
+    spec["compartments"] = sp["compartments"]
+    P = [Polygon(c["polygon"]) for c in spec["compartments"]]
+    i, j = next((i, j) for i in range(len(P)) for j in range(i + 1, len(P)) if P[i].distance(P[j]) < 3)
+    m = client.post(f"/api/inserts/{ins['id']}/compartments/edit",
+                    json={"spec": spec, "op": "merge", "indices": [i, j]}).json()
+    assert Polygon(m["compartments"][-1]["polygon"]).area >= P[i].area + P[j].area
+    spec["compartments"] = m["compartments"]
+    assert not client.post(f"/api/inserts/{ins['id']}/layout", json=spec).json()["warnings"]
+    # zu knapp: verständlicher Grund statt stiller Leere
+    tight = client.post("/api/inserts", json={"grid_x": 4, "grid_y": 2, "auto_grip": False, "comp_min_size": 60,
+                                              "placements": [{"object_id": demo["id"]}]}).json()
+    r = client.post(f"/api/inserts/{tight['id']}/auto-compartments", json=tight).json()
+    assert r["compartments"] == [] and "Platz" in r["reason"]

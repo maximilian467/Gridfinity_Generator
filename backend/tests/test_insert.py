@@ -61,7 +61,8 @@ def test_auto_grid_and_height():
 @pytest.fixture(scope="module")
 def pliers_result():
     o = synthetic_pliers()
-    spec = InsertSpec(grid_x=5, grid_y=3, placements=[Placement(object_id="pliers", x=12, y=42)],
+    spec = InsertSpec(grid_x=5, grid_y=3, auto_center=False, auto_grip=False,
+                      placements=[Placement(object_id="pliers", x=12, y=42)],
                       grip_recesses=[GripRecess(shape="stadium", x=60, y=42, w=14, l=40, rot_deg=90)],
                       compartments=[Compartment(x=180, y=55, w=20, l=20, depth=12)])
     return spec, o, build_insert(spec, {"pliers": o})

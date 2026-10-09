@@ -51,6 +51,14 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const qc = useQueryClient()
   const [spec, setSpec] = useState<InsertSpec>(initial)
   const [sel, setSel] = useState<Sel>(null)
+  const [compSel, setCompSel] = useState<number[]>([])
+  const [compMsg, setCompMsg] = useState<{ text: string; grid: [number, number] } | null>(null)
+  const select = (s: Sel, additive?: boolean) => {
+    setSel(s)
+    if (s?.kind === 'comp') {
+      setCompSel((cur) => additive ? (cur.includes(s.index) ? cur.filter((i) => i !== s.index) : [...cur, s.index]) : [s.index])
+    } else setCompSel([])
+  }
   const [tab, setTab] = useState<'layout' | '3d'>('layout')
   const [jobId, setJobId] = useState<string | null>(null)
   const patch = (p: Partial<InsertSpec>) => setSpec((s) => ({ ...s, ...p }))
@@ -98,7 +106,21 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
     setSpec((sp0) => {
       const sp = sp0.auto_center ? bake(sp0, dx, dy) : sp0
       if (s.kind === 'placement') return { ...sp, placements: sp.placements.map((p, i) => (i === s.index ? { ...p, x: round1(x + dx), y: round1(y + dy) } : p)) }
-      if (s.kind === 'grip') return { ...sp, grip_recesses: sp.grip_recesses.map((p, i) => (i === s.index ? { ...p, x: round1(x + dx), y: round1(y + dy) } : p)) }
+      if (s.kind === 'grip') return { ...sp, grip_recesses: sp.grip_recesses.map((p, i) => {
+        if (i !== s.index) return p
+        const pl = p.attach != null ? sp.placements[p.attach] : undefined
+        const lg = lay?.grips.filter((q) => !q.auto)[i]
+        if (pl && lg?.polygons[0]) {
+          // Verschiebung entlang der Achse -> neue Position s (quer bleibt die Mulde mittig)
+          const xs0 = lg.polygons[0].exterior.map((q) => q[0]), ys0 = lg.polygons[0].exterior.map((q) => q[1])
+          const cx = (Math.min(...xs0) + Math.max(...xs0)) / 2 - (lay?.shift[0] ?? 0)
+          const cy = (Math.min(...ys0) + Math.max(...ys0)) / 2 - (lay?.shift[1] ?? 0)
+          const a = (pl.rot_deg * Math.PI) / 180
+          const ds = (x - cx) * Math.cos(a) + (y - cy) * Math.sin(a)
+          return { ...p, s: round1((p.s ?? 0) + ds) }
+        }
+        return { ...p, x: round1(x + dx), y: round1(y + dy) }
+      }) }
       if (s.kind === 'comp') return { ...sp, compartments: sp.compartments.map((p, i) => {
         if (i !== s.index) return p
         const nx = round1(x + dx), ny = round1(y + dy)
@@ -132,14 +154,27 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const genComps = useMutation({
     mutationFn: () => api.autoCompartments({ ...spec, auto_compartments: false }),
     onSuccess: (r) => {
+      setCompMsg(r.compartments.length ? null : { text: r.reason ?? 'Kein Platz für Kästen.', grid: r.grid })
       setSpec((sp) => ({ ...sp, auto_compartments: false,
         compartments: [...sp.compartments.filter((c) => !c.generated), ...r.compartments.map((c) => ({ ...c, generated: true }))] }))
-      setSel(null)
+      select(null)
     },
   })
   // ältere Einlagen mit 'Kästen automatisch' einmalig in bearbeitbare Kästen umwandeln
   useEffect(() => { if (initial.auto_compartments) genComps.mutate() }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  const clearComps = () => { patch({ compartments: spec.compartments.filter((c) => !c.generated) }); setSel(null) }
+  const clearComps = () => { patch({ compartments: spec.compartments.filter((c) => !c.generated) }); select(null) }
+  const editComps = useMutation({
+    mutationFn: (v: { op: 'merge' | 'split'; parts?: number }) => api.editCompartments(spec, v.op, v.op === 'merge' ? compSel : [sel!.index], v.parts ?? 2),
+    onSuccess: (r) => { patch({ compartments: r.compartments }); select(null) },
+  })
+  const growGrid = () => {
+    if (!compMsg) return
+    const [gx, gy] = compMsg.grid
+    // kürzere Seite um ein Rasterfeld verbreitern, dann neu erzeugen
+    patch(gx <= gy ? { grid_x: gx + 1, grid_y: gy } : { grid_x: gx, grid_y: gy + 1 })
+    setCompMsg(null)
+    setTimeout(() => genComps.mutate(), 400)
+  }
   const nGenerated = spec.compartments.filter((c) => c.generated).length
 
   // Entf-Taste löscht das ausgewählte Element
@@ -152,13 +187,13 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         ...s,
         placements: sel.kind === 'placement' ? s.placements.filter((_, i) => i !== sel.index) : s.placements,
         grip_recesses: sel.kind === 'grip' ? s.grip_recesses.filter((_, i) => i !== sel.index) : s.grip_recesses,
-        compartments: sel.kind === 'comp' ? s.compartments.filter((_, i) => i !== sel.index) : s.compartments,
+        compartments: sel.kind === 'comp' ? s.compartments.filter((_, i) => !(compSel.length ? compSel : [sel.index]).includes(i)) : s.compartments,
       }))
-      setSel(null)
+      select(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [sel])
+  }, [sel, compSel])
   const addComp = () => {
     patch({ compartments: [...spec.compartments, { x: 10, y: 10, w: 25, l: 25, radius: 3, depth: 15 }] })
     setSel({ kind: 'comp', index: spec.compartments.length })
@@ -219,6 +254,11 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             </div>
             <div className="hint mt-0">Jeder Kasten lässt sich anklicken und einzeln löschen (Knopf rechts oder Entf-Taste).</div>
             {genComps.isError && <Msg kind="err">{errText(genComps.error)}</Msg>}
+            {compMsg && (
+              <Msg kind="warn">{compMsg.text}
+                <button className="btn btn-sm mt-2" onClick={growGrid}>Einlage um ein Rasterfeld vergrößern</button>
+              </Msg>
+            )}
           </div>
           <label className="grid gap-1">
             <span className="label mb-0">Kontur glätten <span className="num">{spec.smooth_mm.toFixed(1)} mm</span></span>
@@ -317,7 +357,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             )}
             <div className="panel p-2 relative">
               {layout.isFetching && <div className="absolute inset-x-2 top-1"><BusyBar /></div>}
-              <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={setSel} onMove={move} />
+              <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={select} onMove={move} selectedComps={compSel} />
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm" style={{ color: 'var(--ink-2)' }}>
               <span className="inline-flex items-center gap-2">
@@ -328,6 +368,11 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'color-mix(in srgb, var(--green) 45%, transparent)' }} /> Fach</span>
               <span className="inline-flex items-center gap-2"><span className="swatch" style={{ border: '1px dashed var(--ink-3)' }} /> nutzbarer Innenbereich</span>
             </div>
+            {compMsg && (
+              <Msg kind="warn">{compMsg.text}
+                <button className="btn btn-sm ml-2" onClick={growGrid}>Einlage um ein Rasterfeld vergrößern</button>
+              </Msg>
+            )}
             {warnings.map((w, i) => (
               <Msg key={i} kind="warn">{w}
                 {/Innenbereich|überlappen|Wand zwischen/.test(w) && spec.placements.length > 0 &&
@@ -363,7 +408,9 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
       {/* Rechts */}
       <aside className="panel p-3 grid gap-4 content-start overflow-y-auto" style={{ borderRadius: 0, borderWidth: '0 0 0 1px', maxHeight: 'calc(100dvh - 56px)' }}>
-        <SelectionPanel spec={spec} sel={sel} setSpec={setSpec} onSel={setSel} objMap={objMap}  />
+        <SelectionPanel spec={spec} sel={sel} setSpec={setSpec} onSel={select} objMap={objMap}
+          compSel={compSel} onMerge={() => editComps.mutate({ op: 'merge' })} onSplit={(n) => editComps.mutate({ op: 'split', parts: n })}
+          compBusy={editComps.isPending} compErr={editComps.isError ? errText(editComps.error) : null}  />
 
         <section className="grid gap-2">
           <h3 className="sect">Export</h3>
@@ -420,14 +467,25 @@ function Checks({ job }: { job: NonNullable<ReturnType<typeof useQuery<import('.
   )
 }
 
-function SelectionPanel({ spec, sel, setSpec, onSel, objMap }: {
+function SelectionPanel({ spec, sel, setSpec, onSel, objMap, compSel, onMerge, onSplit, compBusy, compErr }: {
   spec: InsertSpec; sel: Sel; setSpec: (f: (s: InsertSpec) => InsertSpec) => void; onSel: (s: Sel) => void
-  objMap: Record<string, ObjectSpec>
+  objMap: Record<string, ObjectSpec>; compSel: number[]; onMerge: () => void; onSplit: (n: number) => void
+  compBusy: boolean; compErr: string | null
 }) {
   if (!sel) return (
     <div className="grid gap-2">
       <h3 className="sect">Auswahl</h3>
       <div className="hint mt-0">Ein Element im Layout anklicken, um Position, Drehung und Maße genau einzustellen.</div>
+    </div>
+  )
+  if (sel.kind === 'comp' && compSel.length > 1) return (
+    <div className="grid gap-2">
+      <h3 className="sect">{compSel.length} Kästen ausgewählt</h3>
+      <div className="hint mt-0">Nebeneinanderliegende Kästen lassen sich zu einem verbinden; die Wand dazwischen fällt weg.</div>
+      <button className="btn btn-sm btn-primary" onClick={onMerge} disabled={compBusy}>Verbinden</button>
+      <button className="btn btn-sm" onClick={() => { setSpec((s) => ({ ...s, compartments: s.compartments.filter((_, i) => !compSel.includes(i)) })); onSel(null) }}>
+        <Trash size={14} /> Alle {compSel.length} entfernen</button>
+      {compErr && <Msg kind="err">{compErr}</Msg>}
     </div>
   )
   const remove = () => {
@@ -465,6 +523,28 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap }: {
     const g = spec.grip_recesses[sel.index]
     if (!g) return null
     const upd = (q: Partial<GripRecess>) => setSpec((s) => ({ ...s, grip_recesses: s.grip_recesses.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
+    const pl = g.attach != null ? spec.placements[g.attach] : undefined
+    const L = pl ? objMap[pl.object_id]?.length_mm ?? 200 : 0
+    if (pl) return (
+      <div className="grid gap-2">
+        <h3 className="sect">Greifmulde (am Werkzeug)</h3>
+        <div className="hint mt-0">Liegt quer mittig unter dem Werkzeug. Verschieben geht nur entlang der Werkzeugachse.</div>
+        <label className="grid gap-1">
+          <span className="label mb-0">Position entlang des Werkzeugs <span className="num">{(g.s ?? 0).toFixed(1)} mm</span></span>
+          <input type="range" min={0} max={Math.round(L)} step={0.5} value={g.s ?? 0} onChange={(e) => upd({ s: +e.target.value })} />
+        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <NumberField label="Position" value={g.s ?? 0} step={1} min={0} max={L} onChange={(v) => upd({ s: v })} />
+          <NumberField label="Breite" value={g.w} step={0.5} min={4} onChange={(v) => upd({ w: v })} />
+          {!g.auto_length && <NumberField label="Länge" value={g.l} step={1} min={4} onChange={(v) => upd({ l: v })} />}
+          <NumberField label="Tiefe unter Tasche" value={g.depth_below} step={1} min={0} onChange={(v) => upd({ depth_below: v })} />
+        </div>
+        <Check label="Länge automatisch (Breite der Tasche + Überstand)" checked={g.auto_length !== false} onChange={(v) => upd({ auto_length: v })} />
+        <Check label="Rund ausgeformter Boden" checked={g.rounded !== false} onChange={(v) => upd({ rounded: v })} />
+        <button className="btn btn-sm" onClick={() => upd({ attach: null })}>Vom Werkzeug lösen (frei verschieben)</button>
+        {del}
+      </div>
+    )
     return (
       <div className="grid gap-2">
         <h3 className="sect">Greifmulde</h3>
@@ -486,10 +566,15 @@ function SelectionPanel({ spec, sel, setSpec, onSel, objMap }: {
   const upd = (q: Partial<Compartment>) => setSpec((s) => ({ ...s, compartments: s.compartments.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
   if (c.polygon) return (
     <div className="grid gap-2">
-      <h3 className="sect">Kasten (folgt der Kontur)</h3>
+      <h3 className="sect">Kasten</h3>
       <div className="num hint mt-0">ca. {Math.round(c.w)} x {Math.round(c.l)} mm</div>
       <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />
-      <div className="hint mt-0">Mit der Maus verschiebbar. Entf-Taste oder Knopf löscht ihn.</div>
+      <div className="text-sm font-medium mt-1">Teilen in gleich große Fächer</div>
+      <div className="flex gap-2">
+        {[2, 3, 4].map((n) => <button key={n} className="btn btn-sm" onClick={() => onSplit(n)} disabled={compBusy}>{n} Fächer</button>)}
+      </div>
+      <div className="hint mt-0">Mit Shift-Klick weitere Kästen auswählen, um sie zu verbinden. Entf-Taste löscht.</div>
+      {compErr && <Msg kind="err">{compErr}</Msg>}
       {del}
     </div>
   )

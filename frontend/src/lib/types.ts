@@ -1,6 +1,6 @@
 // Spiegel von backend/app/schemas.py
 
-export interface Profile { ds: number; s: number[]; bottom: number[]; top: number[] }
+export interface Profile { ds: number; s: number[]; bottom: number[]; top: number[]; bottom_points?: number[][] | null }
 
 export interface PhotoMeta {
   original: string
@@ -41,7 +41,7 @@ export interface ObjectSpec {
 }
 
 export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
-export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean }
+export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean; attach?: number | null; s?: number | null; auto_length?: boolean }
 export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number; polygon?: [number, number][] | null; generated?: boolean }
 
 export interface InsertSpec {
