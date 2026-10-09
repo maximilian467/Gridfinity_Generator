@@ -3,10 +3,9 @@ import { Group, Layer, Line, Rect, Shape, Stage, Text } from 'react-konva'
 import { alpha, useTokens } from '../../lib/theme'
 import type { InsertSpec, LayoutOut, ObjectSpec, PolyOut } from '../../lib/types'
 
-export type Sel = { kind: 'placement' | 'grip' | 'comp' | 'cell' | 'line'; index: number } | null
+export type Sel = { kind: 'placement' | 'grip' | 'comp'; index: number } | null
 /** Zeichenwerkzeug: Kasten aufziehen oder gerader Schnitt durch einen Kasten */
-export type Tool = { kind: 'box' } | { kind: 'band'; axis: 'h' | 'v' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number }
-  | { kind: 'line'; axis: 'auto' | 'h' | 'v' } | null
+export type Tool = { kind: 'box' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number } | null
 
 const PAD = 28
 const INNER = 2.6
@@ -45,29 +44,23 @@ function centroid(p: PolyOut): [number, number] {
 
 /** Draufsicht der Einlage im mm-Maßstab. Positionen in der Spec gelten vor der automatischen
  *  Zentrierung; das Layout liefert die Verschiebung (shift) mit. */
-export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onBand, onLine, onLineMove, onPocketClick }: {
+export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onPocketClick }: {
   spec: InsertSpec; layout: LayoutOut | undefined; objects?: Record<string, ObjectSpec>
   sel: Sel; onSelect: (s: Sel, additive?: boolean) => void; selectedComps?: number[]
   tool?: Tool
-  /** Kasten-Werkzeug: aufgezogenes Rechteck (Layout-mm); ohne Ziehen x0 = x1, y0 = y1 */
+  /** Kasten zeichnen: Rechteck um die gezeichnete Linie (Layout-mm) */
   onBox?: (x0: number, y0: number, x1: number, y1: number) => void
   /** Schnitt-Werkzeug: Klickposition (Layout-mm) */
   onCut?: (x: number, y: number) => void
-  /** Linien-Werkzeug: zwei Linien (a, b) und der zweite Klickpunkt (Layout-mm) */
-  onBand?: (axis: 'h' | 'v', a: number, b: number, x: number, y: number) => void
-  /** Trennlinie gezogen (Layout-mm, schon waagrecht/senkrecht eingerastet) */
-  onLine?: (x0: number, y0: number, x1: number, y1: number) => void
-  /** Trennlinie verschoben (Index, Verschiebung in mm quer zur Linie) */
-  onLineMove?: (i: number, d: number) => void
   /** Klick in eine Tasche: Platzierung und Layout-Position (mm) */
   onPocketClick?: (pi: number, x: number, y: number) => void
   onMove: (s: NonNullable<Sel>, x: number, y: number) => void
 }) {
   const tk = useTokens()
-  const [drawA, setDrawA] = useState<[number, number] | null>(null)
+  const [stroke, setStrokeState] = useState<[number, number][] | null>(null)   // gezeichnete Linie (mm)
+  const strokeRef = useRef<[number, number][] | null>(null)                      // sofort aktuell (schnelle Ereignisse)
+  const setStroke = (v: [number, number][] | null) => { strokeRef.current = v; setStrokeState(v) }
   const [hoverP, setHoverP] = useState<[number, number] | null>(null)
-  const [bandA, setBandA] = useState<number | null>(null)
-  useEffect(() => { setBandA(null) }, [tool?.kind, tool && 'axis' in tool ? tool.axis : null])
   const wrap = useRef<HTMLDivElement>(null)
   const [w, setW] = useState(800)
   useEffect(() => {
@@ -89,8 +82,7 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   const manualGrips = layout?.grips.filter((g) => !g.auto) ?? []
   const autoGrips = layout?.grips.filter((g) => g.auto) ?? []
   const manualComps = layout?.compartments.filter((c) => !c.auto) ?? []
-  const autoComps = layout?.compartments.filter((c) => c.auto && c.cell === null) ?? []
-  const cells = layout?.compartments.filter((c) => c.cell !== null) ?? []
+  const autoComps = layout?.compartments.filter((c) => c.auto) ?? []
 
   const attachedRot = (g: InsertSpec['grip_recesses'][number]) =>
     g.attach != null && spec.placements[g.attach] ? spec.placements[g.attach].rot_deg : null
@@ -122,18 +114,6 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
           <Rect x={px(INNER)} y={py(OY - INNER)} width={(OX - 2 * INNER) * k} height={(OY - 2 * INNER) * k}
             stroke={tk['ink-2']} strokeWidth={1} dash={[5, 4]} listening={false} />
 
-          {/* Kästen aus Trennlinien: anklickbar (entfernen), Form ergibt sich aus Linien und Werkzeug */}
-          <Group x={px(0)} y={py(0)}>
-            {cells.map((c) => {
-              const act = sel?.kind === 'cell' && sel.index === c.cell
-              return (
-                <Group key={'cell' + c.cell} onMouseDown={() => onSelect({ kind: 'cell', index: c.cell! })}>
-                  <Polys polys={c.polygons} ox={0} oy={0} k={k} fill={alpha(tk.green, act ? 0.4 : 0.26)} stroke={act ? tk.accent : tk.green} width={act ? 2.5 : 1.25} />
-                  {c.rep && label(c.rep[0] + sx, c.rep[1] + sy, c.max_depth ? 'max' : c.depth.toFixed(0))}
-                </Group>
-              )
-            })}
-          </Group>
           {/* automatische Kästen (folgen der Kontur, nicht ziehbar) */}
           <Group x={px(0)} y={py(0)} listening={false}>
             {autoComps.map((c, i) => (
@@ -215,22 +195,6 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
               </Group>
             )
           })}
-          {layout?.lines?.map((ln) => {
-            const [[ax, ay], [bx, by]] = ln.coords
-            const hz = Math.abs(by - ay) < Math.abs(bx - ax)
-            const act = sel?.kind === 'line' && sel.index === ln.index
-            return (
-              <Line key={'ln' + ln.index} points={[px(ax), py(ay), px(bx), py(by)]} stroke={act ? tk.accent : tk.ink}
-                strokeWidth={act ? 4 : 3} hitStrokeWidth={14} lineCap="round" draggable={!tool}
-                dragBoundFunc={function (this: any, pos) { const p0 = this.getAbsolutePosition(); return hz ? { x: p0.x, y: pos.y } : { x: pos.x, y: p0.y } }}
-                onMouseDown={(e) => { e.cancelBubble = true; onSelect({ kind: 'line', index: ln.index }) }}
-                onDragEnd={(e) => {
-                  const d = hz ? -e.target.y() / k : e.target.x() / k
-                  e.target.position({ x: 0, y: 0 })
-                  if (Math.abs(d) > 0.2) onLineMove?.(ln.index, Math.round(d * 2) / 2)
-                }} />
-            )
-          })}
           {tool && (() => {
             const mm = (e: any): [number, number] => {
               const pos = e.target.getStage()!.getPointerPosition()!
@@ -238,69 +202,58 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
             }
             const cc = tool.kind === 'cut' ? spec.compartments[tool.comp] : undefined
             const cutComp = cc?.polygon ? { exterior: cc.polygon.map(([x, y]) => [x + sx, y + sy] as [number, number]) } : undefined
-            const IX0 = INNER, IX1 = OX - INNER, IY0 = INNER, IY1 = OY - INNER
             const cb = cutComp ? (() => {
               const xs = cutComp.exterior.map((q) => q[0]), ys = cutComp.exterior.map((q) => q[1])
               return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
             })() : null
+            // Kasten zeichnen: Rechteck um die Linie, Kanten nahe am Innenrand rasten dort ein
+            const SNAP = 8, IX0 = INNER, IX1 = OX - INNER, IY0 = INNER, IY1 = OY - INNER
+            const rectOf = (pts: [number, number][]) => {
+              const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1])
+              let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys)
+              if (x0 - IX0 < SNAP) x0 = IX0
+              if (IX1 - x1 < SNAP) x1 = IX1
+              if (y0 - IY0 < SNAP) y0 = IY0
+              if (IY1 - y1 < SNAP) y1 = IY1
+              return [x0, y0, x1, y1]
+            }
+            const rb = stroke && stroke.length > 1 ? rectOf(stroke) : null
             return (
               <>
-                {tool.kind === 'box' && drawA && hoverP && (
-                  <Rect x={px(Math.min(drawA[0], hoverP[0]))} y={py(Math.max(drawA[1], hoverP[1]))}
-                    width={Math.abs(hoverP[0] - drawA[0]) * k} height={Math.abs(hoverP[1] - drawA[1]) * k}
-                    stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} fill={alpha(tk.green, 0.12)} listening={false} />
+                {rb && (
+                  <Rect x={px(rb[0])} y={py(rb[3])} width={(rb[2] - rb[0]) * k} height={(rb[3] - rb[1]) * k}
+                    stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} fill={alpha(tk.green, 0.14)} listening={false} />
                 )}
-                {tool.kind === 'band' && bandA !== null && hoverP && (tool.axis === 'h'
-                  ? <Rect x={px(IX0)} y={py(Math.max(bandA, hoverP[1]))} width={(IX1 - IX0) * k} height={Math.abs(hoverP[1] - bandA) * k}
-                      fill={alpha(tk.green, 0.14)} listening={false} />
-                  : <Rect x={px(Math.min(bandA, hoverP[0]))} y={py(IY1)} width={Math.abs(hoverP[0] - bandA) * k} height={(IY1 - IY0) * k}
-                      fill={alpha(tk.green, 0.14)} listening={false} />)}
-                {tool.kind === 'band' && bandA !== null && (tool.axis === 'h'
-                  ? <Line points={[px(IX0), py(bandA), px(IX1), py(bandA)]} stroke={tk.green} strokeWidth={2} listening={false} />
-                  : <Line points={[px(bandA), py(IY0), px(bandA), py(IY1)]} stroke={tk.green} strokeWidth={2} listening={false} />)}
-                {tool.kind === 'band' && hoverP && (tool.axis === 'h'
-                  ? <Line points={[px(IX0), py(hoverP[1]), px(IX1), py(hoverP[1])]} stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} listening={false} />
-                  : <Line points={[px(hoverP[0]), py(IY0), px(hoverP[0]), py(IY1)]} stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} listening={false} />)}
-                {tool.kind === 'line' && (() => {
-                  // Vorschau: eingerastete Linie vom Startpunkt zur Maus (oder durch die Maus)
-                  if (!hoverP) return null
-                  const a = drawA ?? hoverP, b = hoverP
-                  const hz = tool.axis === 'h' || (tool.axis === 'auto' && Math.abs(b[0] - a[0]) >= Math.abs(b[1] - a[1]))
-                  const pts = drawA
-                    ? (hz ? [a[0], a[1], b[0], a[1]] : [a[0], a[1], a[0], b[1]])
-                    : (hz ? [IX0, b[1], IX1, b[1]] : [b[0], IY0, b[0], IY1])
-                  return <Line points={[px(pts[0]), py(pts[1]), px(pts[2]), py(pts[3])]} stroke={tk.accent} strokeWidth={drawA ? 3 : 1.5}
-                    dash={drawA ? undefined : [6, 4]} listening={false} />
-                })()}
-                {cb && hoverP && (tool.kind === 'cut' && tool.axis === 'h'
+                {stroke && stroke.length > 1 && (
+                  <Line points={stroke.flatMap(([x, y]) => [px(x), py(y)])} stroke={tk.accent} strokeWidth={3}
+                    lineCap="round" lineJoin="round" listening={false} />
+                )}
+                {cb && hoverP && tool.kind === 'cut' && (tool.axis === 'h'
                   ? <Line points={[px(cb[0] - 2), py(hoverP[1]), px(cb[2] + 2), py(hoverP[1])]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />
                   : <Line points={[px(hoverP[0]), py(cb[1] - 2), px(hoverP[0]), py(cb[3] + 2)]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />)}
                 <Rect x={0} y={0} width={w} height={h} fill="transparent"
                   onMouseDown={(e) => {
                     e.cancelBubble = true; const p = mm(e)
-                    if (tool.kind === 'box' || tool.kind === 'line') { setDrawA(p); setHoverP(p) }
-                    else if (tool.kind === 'band') {
-                      const v = tool.axis === 'h' ? p[1] : p[0]
-                      if (bandA === null) setBandA(v)
-                      else { onBand?.(tool.axis, bandA, v, p[0], p[1]); setBandA(null) }
-                    } else onCut?.(p[0], p[1])
+                    if (tool.kind === 'box') setStroke([p])
+                    else onCut?.(p[0], p[1])
                   }}
-                  onMouseMove={(e) => setHoverP(mm(e))}
+                  onMouseMove={(e) => {
+                    const p = mm(e); setHoverP(p)
+                    const cur = strokeRef.current
+                    if (tool.kind === 'box' && cur) {
+                      const last = cur[cur.length - 1]
+                      if (Math.hypot(p[0] - last[0], p[1] - last[1]) >= 1) setStroke([...cur, p])
+                    }
+                  }}
                   onMouseLeave={() => setHoverP(null)}
                   onMouseUp={(e) => {
-                    if (tool.kind === 'line' && drawA) {
-                      const p = mm(e); setDrawA(null)
-                      const moved = Math.abs(p[0] - drawA[0]) >= 3 || Math.abs(p[1] - drawA[1]) >= 3
-                      const hz = tool.axis === 'h' || (tool.axis === 'auto' && Math.abs(p[0] - drawA[0]) >= Math.abs(p[1] - drawA[1]))
-                      if (!moved && tool.axis === 'auto') return     // nur Klick: Richtung unbekannt
-                      if (hz) onLine?.(drawA[0], drawA[1], moved ? p[0] : drawA[0] + 0.5, drawA[1])
-                      else onLine?.(drawA[0], drawA[1], drawA[0], moved ? p[1] : drawA[1] + 0.5)
-                      return
-                    }
-                    if (tool.kind !== 'box' || !drawA) return
-                    const p = mm(e); setDrawA(null)
-                    const small = Math.abs(p[0] - drawA[0]) < 3 && Math.abs(p[1] - drawA[1]) < 3
-                    onBox?.(drawA[0], drawA[1], small ? drawA[0] : p[0], small ? drawA[1] : p[1])
+                    const cur = strokeRef.current
+                    if (tool.kind !== 'box' || !cur) return
+                    const pts = [...cur, mm(e)]
+                    setStroke(null)
+                    const r = rectOf(pts)
+                    if (r[2] - r[0] < 4 || r[3] - r[1] < 4) return        // zu klein: nur geklickt
+                    onBox?.(r[0], r[1], r[2], r[3])
                   }} />
               </>
             )

@@ -174,7 +174,7 @@ InsertSpec
 > - Greifmulde: ovaler Querschnitt mit gerundeter Oberkante, als ein Loft-Körper (Rotationskörper waren nicht wasserdicht).
 > - Neigung des Seitenprofils nicht als Tisch-Ruhelage (Hüllkurve), sondern so, dass die Unterseite am besten auf wenigen Ebenen aufliegt (`profile.best_tilt`): sonst kippt z. B. eine Zange auf Griffschutz + Griffende und der gerade Griff wirkt schräg.
 > - Taschenkontur: `smooth_hull` (Gauß-Glättung + lokales Aufweiten, wo das Original heraussteht) statt Schließen: ruhige Linie ohne Wellen, enthält Werkzeug + Spiel garantiert.
-> - Kästen zusätzlich als aufgezogenes Rechteck (gerade Kanten, am Werkzeug konturfolgend) und gerader Schnitt (waagrecht/senkrecht) an einer Klickstelle.
+> - Kästen werden gezeichnet: die Begrenzung als Linie (z. B. ein L vom Rand zur Werkzeugspitze und zum Rand); der Kasten füllt das Rechteck um die Linie (Kanten nahe am Rand rasten ein) bis an Werkzeug/Mulde/andere Kästen mit Wandabstand. Dazu gerader Schnitt (waagrecht/senkrecht) an einer Klickstelle.
 
 ### D. Kontur (`vision/contour.py`)
 - Größte Außenkontur, **Löcher füllen** (Default an, z. B. Lücke zwischen Zangengriffen), Douglas-Peucker 0.1 mm, `shapely.make_valid`.

@@ -43,9 +43,7 @@ def layout_payload(spec: InsertSpec) -> dict:
                    "placement": g.placement, "rounded": g.rounded,
                    "params": g.params.model_dump() if g.params else None} for g in lay.grips],
         "compartments": [{"z0": c.z0, "depth": lay.z_surface - c.z0, "polygons": _polys(c.poly), "auto": c.auto,
-                          "max_depth": c.free_depth, "cell": c.cell, "rep": list(c.rep) if c.rep else None}
-                         for c in lay.comps],
-        "lines": [{"index": i, "coords": [list(p) for p in seg.coords]} for i, seg in lay.lines],
+                          "max_depth": c.free_depth} for c in lay.comps],
         "shift": list(lay.shift),
         "zones": [[{"a": z.a, "b": z.b, "floor": z.floor} for z in zs] for zs in lay.zones],
         "warnings": lay.warnings,
@@ -270,50 +268,6 @@ def compartment_at(iid: str, body: CompAt) -> dict:
     return {"compartments": [c.model_dump() for c in spec.compartments] + [c.model_dump()]}
 
 
-class CompBand(BaseModel):
-    spec: InsertSpec
-    axis: Literal["h", "v"] = "h"                # h: zwei waagrechte Linien (y = a, y = b)
-    a: float = Field(ge=-2000, le=2000)          # Layout-Koordinaten (nach Zentrierung)
-    b: float = Field(ge=-2000, le=2000)
-    x: float = Field(ge=-2000, le=2000)          # Klickpunkt: auf welcher Seite des Werkzeugs
-    y: float = Field(ge=-2000, le=2000)
-
-
-@router.post("/{iid}/compartments/band")
-def compartment_band(iid: str, body: CompBand) -> dict:
-    """Kasten zwischen zwei geraden Linien: gerade Kanten an den Linien, quer dazu so weit, bis
-    Werkzeug, Mulde, Rand oder ein anderer Kasten kommt (gerade oder konturfolgend)."""
-    from ..geometry.layout import _polys, band_rect
-    from ..schemas import Compartment
-
-    spec = body.spec.model_copy(update={"id": iid})
-    layout_payload(spec)
-    free, _ = _free_area(spec, set())
-    lay = compute_layout(spec, storage.objects_for(spec))
-    sx, sy = lay.shift
-    if body.axis == "h":
-        a, b, px, py = body.a - sy, body.b - sy, body.x - sx, body.y - sy
-    else:
-        a, b, px, py = body.a - sx, body.b - sx, body.x - sx, body.y - sy
-    if abs(a - b) < 6:
-        raise HTTPException(422, "Die beiden Linien liegen zu dicht beieinander (mindestens 6 mm)")
-    g = band_rect(free, body.axis, a, b, px, py, spec.comp_follow)
-    if g is None or g.is_empty:
-        raise HTTPException(422, "Dort ist kein freier Platz für einen Kasten")
-    g = g.buffer(-2.0, join_style=1).buffer(2.0, join_style=1)
-    gs = _polys(g)
-    if not gs:
-        raise HTTPException(422, "Der Kasten wäre zu schmal")
-    g = max(gs, key=lambda q: q.area).simplify(0.05)
-    if min(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) < 6:
-        raise HTTPException(422, "Der Kasten wäre schmaler als 6 mm")
-    x0, y0, x1, y1 = g.bounds
-    c = Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, generated=True,
-                    depth=round(spec.comp_depth, 1) if spec.comp_depth else None,
-                    polygon=[[round(u, 2), round(v, 2)] for u, v in g.exterior.coords])
-    return {"compartments": [q.model_dump() for q in spec.compartments] + [c.model_dump()]}
-
-
 class CompRect(BaseModel):
     spec: InsertSpec
     x0: float = Field(ge=-2000, le=2000)        # aufgezogenes Rechteck im Layout (nach Zentrierung)
@@ -324,8 +278,10 @@ class CompRect(BaseModel):
 
 @router.post("/{iid}/compartments/rect")
 def compartment_rect(iid: str, body: CompRect) -> dict:
-    """Kasten aus einem aufgezogenen Rechteck: gerade Kanten, wo gezeichnet wurde; wo das
-    Rechteck in Werkzeug, Mulde, Rand oder andere Kästen ragt, folgt die Wand deren Kontur."""
+    """Kasten zeichnen: Rechteck um die gezeichnete Linie (z. B. ein L vom Rand zur Werkzeugspitze
+    und hoch zum oberen Rand). Kanten näher als 8 mm am Innenrand rasten am Rand ein. Wo das
+    Rechteck über Werkzeug, Mulde oder einen anderen Kasten reicht, endet der Kasten mit
+    Wandabstand davor: comp_follow = entlang der Kontur, sonst als größtes gerades Rechteck."""
     from shapely import affinity
     from shapely.geometry import box
 
@@ -336,8 +292,15 @@ def compartment_rect(iid: str, body: CompRect) -> dict:
     layout_payload(spec)
     free, _ = _free_area(spec, set())                      # Spec-Koordinaten
     lay = compute_layout(spec, storage.objects_for(spec))
-    r = affinity.translate(box(min(body.x0, body.x1), min(body.y0, body.y1), max(body.x0, body.x1),
-                               max(body.y0, body.y1)), -lay.shift[0], -lay.shift[1])
+    ix0, iy0, ix1, iy1 = lay.inner.bounds
+    snap = 8.0
+    x0, x1 = sorted((body.x0, body.x1))
+    y0, y1 = sorted((body.y0, body.y1))
+    x0 = ix0 - 1 if x0 - ix0 < snap else x0
+    y0 = iy0 - 1 if y0 - iy0 < snap else y0
+    x1 = ix1 + 1 if ix1 - x1 < snap else x1
+    y1 = iy1 + 1 if iy1 - y1 < snap else y1
+    r = affinity.translate(box(x0, y0, x1, y1), -lay.shift[0], -lay.shift[1])
     region = r.intersection(free)
     parts = [g for g in _polys(region) if g.area > 30]
     if not parts:
@@ -347,7 +310,14 @@ def compartment_rect(iid: str, body: CompRect) -> dict:
     gs = _polys(g)
     if not gs:
         raise HTTPException(422, "Das Rechteck ist zu schmal für einen Kasten")
-    g = max(gs, key=lambda q: q.area).simplify(0.1)
+    g = max(gs, key=lambda q: q.area)
+    if not spec.comp_follow:
+        from ..geometry.layout import largest_rect
+        rr = largest_rect(g)
+        if rr is None:
+            raise HTTPException(422, "Kein gerader Kasten möglich")
+        g = rr.buffer(-1.5, join_style=1).buffer(1.5, join_style=1)
+    g = g.simplify(0.05)
     if min(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) < 6:
         raise HTTPException(422, "Der Kasten wäre schmaler als 6 mm")
     x0, y0, x1, y1 = g.bounds

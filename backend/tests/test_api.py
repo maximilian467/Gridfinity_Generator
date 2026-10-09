@@ -182,12 +182,13 @@ def test_compartment_rect_and_straight_cut():
     ox, oy = lay["outer"]
     # Rechteck vom Rand bis über die Tasche hinaus: gerade Kanten außen, Wand folgt der Tasche
     r = client.post(f"/api/inserts/{ins['id']}/compartments/rect",
-                    json={"spec": ins, "x0": 4, "y0": 10, "x1": ox / 2, "y1": 60})
+                    json={"spec": ins, "x0": 4, "y0": 20, "x1": ox / 2, "y1": 60})
     assert r.status_code == 200, r.text
     c = r.json()["compartments"][0]
     P = Polygon(c["polygon"])
     sx, sy = lay["shift"]
-    assert P.bounds[1] == pytest.approx(10 - sy, abs=0.3) and P.bounds[3] == pytest.approx(60 - sy, abs=0.3)
+    assert P.bounds[1] == pytest.approx(20 - sy, abs=0.3) and P.bounds[3] == pytest.approx(60 - sy, abs=0.3)
+    assert P.bounds[0] == pytest.approx(2.6 - sx, abs=0.3)          # x0 = 4 rastet am Rand ein
     assert P.area > 0.9 * box(*P.bounds).area * 0.5
     ins["compartments"] = r.json()["compartments"]
     assert not client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()["warnings"]
@@ -199,24 +200,34 @@ def test_compartment_rect_and_straight_cut():
     assert lo.bounds[3] == pytest.approx(mid - 0.8, abs=0.4) and hi.bounds[1] == pytest.approx(mid + 0.8, abs=0.4)
 
 
-def test_compartment_between_two_lines_is_straight():
-    from shapely.geometry import Polygon, box
+
+def test_draw_two_corner_boxes_with_wall():
+    """L-Linie vom linken Rand zur Werkzeugspitze und hoch zum oberen Rand = Kasten oben links,
+    der der Spitze folgt; dasselbe rechts = zweiter Kasten, eine Wand dazwischen."""
+    from shapely.geometry import Polygon
     demo = client.post("/api/objects/demo").json()
-    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False, "comp_follow": False,
+    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False,
                                             "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
     lay = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
     ox, oy = lay["outer"]
-    r = client.post(f"/api/inserts/{ins['id']}/compartments/band",
-                    json={"spec": ins, "axis": "h", "a": 20, "b": 70, "x": 8, "y": 40})
-    assert r.status_code == 200, r.text
-    P = Polygon(r.json()["compartments"][0]["polygon"])
-    sx, sy = lay["shift"]
-    # gerades Rechteck (nur Eckradien), zwischen den Linien, links bis zum Rand, rechts bis vor die Tasche
-    assert P.area > 0.97 * box(*P.bounds).area
-    assert P.bounds[1] == pytest.approx(20 - sy, abs=0.2) and P.bounds[3] == pytest.approx(70 - sy, abs=0.2)
-    ins["compartments"] = r.json()["compartments"]
+    pocket = Polygon(lay["pieces"][-1]["polygons"][0]["exterior"])
+    tip_x = (pocket.bounds[0] + pocket.bounds[2]) / 2
+    y_cut = oy - 70
+    # Linie: Startpunkt nahe dem linken Rand, Ende nahe dem oberen Rand (Rechteck rastet ein)
+    a = client.post(f"/api/inserts/{ins['id']}/compartments/rect",
+                    json={"spec": ins, "x0": 5, "y0": y_cut, "x1": tip_x, "y1": oy - 4})
+    assert a.status_code == 200, a.text
+    ins["compartments"] = a.json()["compartments"]
+    b = client.post(f"/api/inserts/{ins['id']}/compartments/rect",
+                    json={"spec": ins, "x0": tip_x, "y0": y_cut, "x1": ox - 5, "y1": oy - 4})
+    assert b.status_code == 200, b.text
+    ins["compartments"] = b.json()["compartments"]
     lay2 = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
-    assert not lay2["warnings"]
-    pocket = Polygon(lay2["pieces"][0]["polygons"][0]["exterior"])
-    comp = Polygon(lay2["compartments"][0]["polygons"][0]["exterior"])
-    assert 1.5 <= comp.distance(pocket) <= 4.0 or comp.bounds[2] < pocket.bounds[0]
+    assert not lay2["warnings"], lay2["warnings"]
+    A, B = [Polygon(c["polygons"][0]["exterior"]) for c in lay2["compartments"]]
+    inner = 2.6
+    assert A.bounds[0] == pytest.approx(inner, abs=0.3) and A.bounds[3] == pytest.approx(oy - inner, abs=0.3)
+    assert B.bounds[2] == pytest.approx(ox - inner, abs=0.3) and B.bounds[3] == pytest.approx(oy - inner, abs=0.3)
+    assert 1.5 <= A.distance(B) <= 2.5                         # eine Wand dazwischen
+    tool = Polygon(lay2["pieces"][-1]["polygons"][0]["exterior"])
+    assert A.distance(tool) < 3 and B.distance(tool) < 3      # beide reichen bis an die Spitze
