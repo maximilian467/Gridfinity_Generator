@@ -167,3 +167,19 @@ def test_hand_removed_from_side_photo():
     b = got.bounds
     # Rest ist ein dünner Streifen (Dicke + Parallaxe), keine Handfläche mehr
     assert (b[3] - b[1]) < T + 8
+
+
+def test_largest_polygon_handles_nested_collections():
+    """Regression: make_valid lieferte GeometryCollection(MultiPolygon, LineString) -> Absturz im Profil."""
+    from shapely.geometry import Polygon
+    from app.vision.contour import largest_polygon
+    spike = Polygon([(0, 0), (10, 0), (10, 10), (5, 10), (5, 15), (5, 10), (0, 10)])          # Nullbreite-Stachel
+    bowtie_spike = Polygon([(0, 0), (10, 10), (10, 0), (0, 10), (0, 12), (0, 10)])             # Schleife + Stachel
+    for g in (spike, bowtie_spike):
+        p = largest_polygon(g)
+        assert p is not None and p.geom_type == "Polygon" and p.area > 20
+    import numpy as np
+    m = np.zeros((300, 300), np.uint8)
+    m[100:150, 100:200] = 255
+    m[150:200, 200:250] = 255          # berührt die erste Fläche nur an einer Ecke
+    assert mask_to_polygon(m).area > 40

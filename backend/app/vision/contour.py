@@ -11,6 +11,18 @@ from shapely.validation import make_valid
 from .a4 import rect_px_to_mm
 
 
+def largest_polygon(geom) -> Polygon | None:
+    """Beliebige (auch ungültige oder verschachtelte) Geometrie -> größtes Polygon.
+    make_valid kann bei Selbstüberschneidungen GeometryCollections aus MultiPolygonen und
+    Linien liefern; buffer(0) macht daraus eine reine Fläche."""
+    g = make_valid(geom)
+    if g.geom_type not in ("Polygon", "MultiPolygon"):
+        g = g.buffer(0)
+    parts = [g] if g.geom_type == "Polygon" else [p for p in getattr(g, "geoms", []) if p.geom_type == "Polygon"]
+    parts = [p for p in parts if not p.is_empty]
+    return max(parts, key=lambda p: p.area) if parts else None
+
+
 def mask_to_polygon(mask: np.ndarray, fill_holes: bool = True, simplify_mm: float = 0.1) -> Polygon:
     """Größte Außenkontur der Maske als Polygon in Papier-mm (x rechts, y unten)."""
     mode = cv2.RETR_EXTERNAL if fill_holes else cv2.RETR_CCOMP
@@ -24,9 +36,9 @@ def mask_to_polygon(mask: np.ndarray, fill_holes: bool = True, simplify_mm: floa
         for j, c in enumerate(cnts):
             if hier[0][j][3] == i and len(c) >= 4:
                 holes.append(rect_px_to_mm(c.reshape(-1, 2).astype(float) + 0.5))
-    poly = make_valid(Polygon(outer, holes))
-    if poly.geom_type != "Polygon":
-        poly = max((g for g in getattr(poly, "geoms", []) if g.geom_type == "Polygon"), key=lambda g: g.area)
+    poly = largest_polygon(Polygon(outer, holes))
+    if poly is None:
+        raise ValueError("Maske ergibt keine Fläche")
     return poly.simplify(simplify_mm)
 
 
@@ -76,4 +88,4 @@ def pca_frame(poly: Polygon) -> Frame:
 
 def polygon_local(poly: Polygon, frame: Frame) -> Polygon:
     pts = frame.to_local(np.asarray(poly.exterior.coords)[:-1])
-    return make_valid(Polygon(pts)).buffer(0)
+    return largest_polygon(Polygon(pts)) or Polygon(pts).buffer(0)

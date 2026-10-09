@@ -62,10 +62,11 @@ def _cross(a, b) -> float:
 
 
 def _largest(g) -> Polygon:
-    g = make_valid(g).buffer(0)
-    if g.geom_type == "Polygon":
-        return g
-    return max((x for x in g.geoms if x.geom_type == "Polygon"), key=lambda x: x.area)
+    from .contour import largest_polygon
+    p = largest_polygon(g)
+    if p is None:
+        raise ValueError("Kontur ergibt keine Fläche")
+    return p
 
 
 def _lower_hull(pts: np.ndarray) -> np.ndarray:

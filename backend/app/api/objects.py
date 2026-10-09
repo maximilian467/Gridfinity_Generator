@@ -299,11 +299,17 @@ def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
         if not (d / f"{view}_mask.png").exists():
             raise HTTPException(409, f"Maske '{view}' fehlt")
         mask = cv2.imread(str(d / f"{view}_mask.png"), cv2.IMREAD_GRAYSCALE)
-        polys[view] = contour.mask_to_polygon(mask, ph.get("fill_holes", True))
+        try:
+            polys[view] = contour.mask_to_polygon(mask, ph.get("fill_holes", True))
+        except ValueError:
+            raise HTTPException(422, f"Der Umriss der {'Draufsicht' if view == 'top' else 'Seitenansicht'} ist leer oder ungültig.") from None
         pj = ph["pose"]
         poses[view] = pose.CameraPose(tuple(pj["C_mm"]), pj["f_px"], pj["f35_assumed"], tuple(pj["warnings"]))
-    g = profile.build_object(polys["top"], polys["side"], poses["top"], poses["side"], spec.side_flip_lr,
-                             spec.side_flip_ud, spec.calipers, cut_point=spec.photos["side"].get("cut_point_mm"))
+    try:
+        g = profile.build_object(polys["top"], polys["side"], poses["top"], poses["side"], spec.side_flip_lr,
+                                 spec.side_flip_ud, spec.calipers, cut_point=spec.photos["side"].get("cut_point_mm"))
+    except (ValueError, IndexError) as e:
+        raise HTTPException(422, f"Profil konnte nicht berechnet werden ({e}). Bitte die Umrisse prüfen.") from e
     ov = body.profile_overrides or {}
     bottom, top = g.profile.bottom.tolist(), g.profile.top.tolist()
     for key, arr in (("bottom", bottom), ("top", top)):
