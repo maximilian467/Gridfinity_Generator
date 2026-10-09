@@ -1,5 +1,6 @@
 """Ebenen statt Höhenprofil, Einsinktiefe, feste Gesamthöhe, weiche Greifmulde, Kästen."""
 import cadquery as cq
+from shapely.geometry import Point
 import numpy as np
 import pytest
 
@@ -104,3 +105,26 @@ def test_soft_grip_profile():
     ux, uy = (bx - ax) / L, (by - ay) / L
     assert not solid.isInside(cq.Vector(bx + ux * 6, by + uy * 6, g.z0 + 1))
     assert solid.isInside(cq.Vector(bx + ux * 2, by + uy * 2, zt - 2))
+
+
+def test_divider_lines_split_free_area():
+    from app.schemas import CompLine
+    o = synthetic_pliers()
+    base = InsertSpec(grid_x=3, grid_y=5, placements=[Placement(object_id="p", rot_deg=90)], comp_cells=True)
+    lay0 = compute_layout(base, {"p": o})
+    assert len([c for c in lay0.comps if c.cell is not None]) == 1          # ganze freie Fläche
+    sx, sy = lay0.shift
+    lines = [CompLine(x0=4 - sx, y0=60 - sy, x1=20 - sx, y1=60 - sy),      # waagrecht, links
+             CompLine(x0=15 - sx, y0=20 - sy, x1=15 - sx, y1=40 - sy)]     # senkrecht, stoppt an Linie 1
+    lay = compute_layout(base.model_copy(update={"comp_lines": lines}), {"p": o})
+    (_, a), (_, b) = lay.lines
+    pocket = lay.pocket_union()
+    assert a.coords[0][0] == pytest.approx(lay.inner.bounds[0], abs=0.1)     # vom Rand ...
+    assert pocket.distance(Point(a.coords[-1])) < 4                         # ... bis ans Werkzeug
+    assert b.coords[-1][1] == pytest.approx(60 - max(base.comp_wall, 0.8) / 2, abs=0.6)
+    cells = [c for c in lay.comps if c.cell is not None]
+    assert len(cells) == 2 and not lay.warnings          # Ring um das Werkzeug: zwei Schnitte = zwei Felder
+    # Feld entfernen
+    rep = cells[0].rep
+    lay2 = compute_layout(base.model_copy(update={"comp_lines": lines, "comp_skip": [list(rep)]}), {"p": o})
+    assert len([c for c in lay2.comps if c.cell is not None]) == 1

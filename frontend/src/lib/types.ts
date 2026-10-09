@@ -44,6 +44,7 @@ export interface ObjectSpec {
 
 export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
 export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean; attach?: number | null; s?: number | null; auto_length?: boolean; edge_r?: number }
+export interface CompLine { x0: number; y0: number; x1: number; y1: number }
 export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number | null; polygon?: [number, number][] | null; generated?: boolean }
 
 export interface InsertSpec {
@@ -76,6 +77,9 @@ export interface InsertSpec {
   comp_wall: number
   comp_depth: number | null
   comp_follow: boolean
+  comp_cells: boolean
+  comp_lines: CompLine[]
+  comp_skip: [number, number][]
   placements: Placement[]
   grip_recesses: GripRecess[]
   compartments: Compartment[]
@@ -88,7 +92,8 @@ export interface LayoutOut {
   grid_x: number; grid_y: number; height_u: number; z_surface: number; total_height: number; sink: number[]; outer: [number, number]
   pieces: { placement: number; zone: number; z0: number; depth: number; polygons: PolyOut[] }[]
   grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean; params: GripRecess | null }[]
-  compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; max_depth: boolean }[]
+  compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; max_depth: boolean; cell: number | null; rep: [number, number] | null }[]
+  lines: { index: number; coords: [number, number][] }[]
   shift: [number, number]
   zones: { a: number; b: number; floor: number }[][]
   warnings: string[]

@@ -108,7 +108,7 @@ def test_demo_object_and_insert_crud():
 def test_compartments_merge_split_and_reason():
     from shapely.geometry import Polygon, box
     demo = client.post("/api/objects/demo").json()
-    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False,
+    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False, "comp_follow": False,
                                             "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
     spec = dict(ins)
     r = client.post(f"/api/inserts/{ins['id']}/auto-compartments", json=spec).json()
@@ -202,7 +202,7 @@ def test_compartment_rect_and_straight_cut():
 def test_compartment_between_two_lines_is_straight():
     from shapely.geometry import Polygon, box
     demo = client.post("/api/objects/demo").json()
-    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False,
+    ins = client.post("/api/inserts", json={"grid_x": 3, "grid_y": 5, "auto_grip": False, "comp_follow": False,
                                             "placements": [{"object_id": demo["id"], "rot_deg": 90}]}).json()
     lay = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
     ox, oy = lay["outer"]

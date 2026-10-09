@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Group, Layer, Line, Rect, Stage, Text } from 'react-konva'
+import { Group, Layer, Line, Rect, Shape, Stage, Text } from 'react-konva'
 import { alpha, useTokens } from '../../lib/theme'
 import type { InsertSpec, LayoutOut, ObjectSpec, PolyOut } from '../../lib/types'
 
-export type Sel = { kind: 'placement' | 'grip' | 'comp'; index: number } | null
+export type Sel = { kind: 'placement' | 'grip' | 'comp' | 'cell' | 'line'; index: number } | null
 /** Zeichenwerkzeug: Kasten aufziehen oder gerader Schnitt durch einen Kasten */
-export type Tool = { kind: 'box' } | { kind: 'band'; axis: 'h' | 'v' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number } | null
+export type Tool = { kind: 'box' } | { kind: 'band'; axis: 'h' | 'v' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number }
+  | { kind: 'line'; axis: 'auto' | 'h' | 'v' } | null
 
 const PAD = 28
 const INNER = 2.6
@@ -20,7 +21,17 @@ function Polys({ polys, ox, oy, k, fill, stroke, dash, width = 1.25 }: {
 }) {
   return (
     <>
-      {polys.map((p, i) => (
+      {polys.map((p, i) => p.holes.length ? (
+        <Shape key={i} fill={fill} stroke={stroke} strokeWidth={width} dash={dash}
+          sceneFunc={(ctx, shape) => {
+            ctx.beginPath()
+            for (const ring of [p.exterior, ...p.holes]) {
+              ring.forEach(([x, y], j) => (j ? ctx.lineTo((x - ox) * k, -(y - oy) * k) : ctx.moveTo((x - ox) * k, -(y - oy) * k)))
+              ctx.closePath()
+            }
+            ctx.fillStrokeShape(shape)
+          }} />
+      ) : (
         <Line key={i} points={flat(p.exterior, ox, oy, k)} closed fill={fill} stroke={stroke} strokeWidth={width} dash={dash} />
       ))}
     </>
@@ -34,7 +45,7 @@ function centroid(p: PolyOut): [number, number] {
 
 /** Draufsicht der Einlage im mm-Maßstab. Positionen in der Spec gelten vor der automatischen
  *  Zentrierung; das Layout liefert die Verschiebung (shift) mit. */
-export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onBand, onPocketClick }: {
+export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onBand, onLine, onLineMove, onPocketClick }: {
   spec: InsertSpec; layout: LayoutOut | undefined; objects?: Record<string, ObjectSpec>
   sel: Sel; onSelect: (s: Sel, additive?: boolean) => void; selectedComps?: number[]
   tool?: Tool
@@ -44,6 +55,10 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   onCut?: (x: number, y: number) => void
   /** Linien-Werkzeug: zwei Linien (a, b) und der zweite Klickpunkt (Layout-mm) */
   onBand?: (axis: 'h' | 'v', a: number, b: number, x: number, y: number) => void
+  /** Trennlinie gezogen (Layout-mm, schon waagrecht/senkrecht eingerastet) */
+  onLine?: (x0: number, y0: number, x1: number, y1: number) => void
+  /** Trennlinie verschoben (Index, Verschiebung in mm quer zur Linie) */
+  onLineMove?: (i: number, d: number) => void
   /** Klick in eine Tasche: Platzierung und Layout-Position (mm) */
   onPocketClick?: (pi: number, x: number, y: number) => void
   onMove: (s: NonNullable<Sel>, x: number, y: number) => void
@@ -74,7 +89,8 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   const manualGrips = layout?.grips.filter((g) => !g.auto) ?? []
   const autoGrips = layout?.grips.filter((g) => g.auto) ?? []
   const manualComps = layout?.compartments.filter((c) => !c.auto) ?? []
-  const autoComps = layout?.compartments.filter((c) => c.auto) ?? []
+  const autoComps = layout?.compartments.filter((c) => c.auto && c.cell === null) ?? []
+  const cells = layout?.compartments.filter((c) => c.cell !== null) ?? []
 
   const attachedRot = (g: InsertSpec['grip_recesses'][number]) =>
     g.attach != null && spec.placements[g.attach] ? spec.placements[g.attach].rot_deg : null
@@ -106,6 +122,18 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
           <Rect x={px(INNER)} y={py(OY - INNER)} width={(OX - 2 * INNER) * k} height={(OY - 2 * INNER) * k}
             stroke={tk['ink-2']} strokeWidth={1} dash={[5, 4]} listening={false} />
 
+          {/* Kästen aus Trennlinien: anklickbar (entfernen), Form ergibt sich aus Linien und Werkzeug */}
+          <Group x={px(0)} y={py(0)}>
+            {cells.map((c) => {
+              const act = sel?.kind === 'cell' && sel.index === c.cell
+              return (
+                <Group key={'cell' + c.cell} onMouseDown={() => onSelect({ kind: 'cell', index: c.cell! })}>
+                  <Polys polys={c.polygons} ox={0} oy={0} k={k} fill={alpha(tk.green, act ? 0.4 : 0.26)} stroke={act ? tk.accent : tk.green} width={act ? 2.5 : 1.25} />
+                  {c.rep && label(c.rep[0] + sx, c.rep[1] + sy, c.max_depth ? 'max' : c.depth.toFixed(0))}
+                </Group>
+              )
+            })}
+          </Group>
           {/* automatische Kästen (folgen der Kontur, nicht ziehbar) */}
           <Group x={px(0)} y={py(0)} listening={false}>
             {autoComps.map((c, i) => (
@@ -187,6 +215,22 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
               </Group>
             )
           })}
+          {layout?.lines?.map((ln) => {
+            const [[ax, ay], [bx, by]] = ln.coords
+            const hz = Math.abs(by - ay) < Math.abs(bx - ax)
+            const act = sel?.kind === 'line' && sel.index === ln.index
+            return (
+              <Line key={'ln' + ln.index} points={[px(ax), py(ay), px(bx), py(by)]} stroke={act ? tk.accent : tk.ink}
+                strokeWidth={act ? 4 : 3} hitStrokeWidth={14} lineCap="round" draggable={!tool}
+                dragBoundFunc={function (this: any, pos) { const p0 = this.getAbsolutePosition(); return hz ? { x: p0.x, y: pos.y } : { x: pos.x, y: p0.y } }}
+                onMouseDown={(e) => { e.cancelBubble = true; onSelect({ kind: 'line', index: ln.index }) }}
+                onDragEnd={(e) => {
+                  const d = hz ? -e.target.y() / k : e.target.x() / k
+                  e.target.position({ x: 0, y: 0 })
+                  if (Math.abs(d) > 0.2) onLineMove?.(ln.index, Math.round(d * 2) / 2)
+                }} />
+            )
+          })}
           {tool && (() => {
             const mm = (e: any): [number, number] => {
               const pos = e.target.getStage()!.getPointerPosition()!
@@ -217,13 +261,24 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
                 {tool.kind === 'band' && hoverP && (tool.axis === 'h'
                   ? <Line points={[px(IX0), py(hoverP[1]), px(IX1), py(hoverP[1])]} stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} listening={false} />
                   : <Line points={[px(hoverP[0]), py(IY0), px(hoverP[0]), py(IY1)]} stroke={tk.green} strokeWidth={1.5} dash={[6, 4]} listening={false} />)}
+                {tool.kind === 'line' && (() => {
+                  // Vorschau: eingerastete Linie vom Startpunkt zur Maus (oder durch die Maus)
+                  if (!hoverP) return null
+                  const a = drawA ?? hoverP, b = hoverP
+                  const hz = tool.axis === 'h' || (tool.axis === 'auto' && Math.abs(b[0] - a[0]) >= Math.abs(b[1] - a[1]))
+                  const pts = drawA
+                    ? (hz ? [a[0], a[1], b[0], a[1]] : [a[0], a[1], a[0], b[1]])
+                    : (hz ? [IX0, b[1], IX1, b[1]] : [b[0], IY0, b[0], IY1])
+                  return <Line points={[px(pts[0]), py(pts[1]), px(pts[2]), py(pts[3])]} stroke={tk.accent} strokeWidth={drawA ? 3 : 1.5}
+                    dash={drawA ? undefined : [6, 4]} listening={false} />
+                })()}
                 {cb && hoverP && (tool.kind === 'cut' && tool.axis === 'h'
                   ? <Line points={[px(cb[0] - 2), py(hoverP[1]), px(cb[2] + 2), py(hoverP[1])]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />
                   : <Line points={[px(hoverP[0]), py(cb[1] - 2), px(hoverP[0]), py(cb[3] + 2)]} stroke={tk.accent} strokeWidth={2} dash={[6, 4]} listening={false} />)}
                 <Rect x={0} y={0} width={w} height={h} fill="transparent"
                   onMouseDown={(e) => {
                     e.cancelBubble = true; const p = mm(e)
-                    if (tool.kind === 'box') { setDrawA(p); setHoverP(p) }
+                    if (tool.kind === 'box' || tool.kind === 'line') { setDrawA(p); setHoverP(p) }
                     else if (tool.kind === 'band') {
                       const v = tool.axis === 'h' ? p[1] : p[0]
                       if (bandA === null) setBandA(v)
@@ -233,6 +288,15 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
                   onMouseMove={(e) => setHoverP(mm(e))}
                   onMouseLeave={() => setHoverP(null)}
                   onMouseUp={(e) => {
+                    if (tool.kind === 'line' && drawA) {
+                      const p = mm(e); setDrawA(null)
+                      const moved = Math.abs(p[0] - drawA[0]) >= 3 || Math.abs(p[1] - drawA[1]) >= 3
+                      const hz = tool.axis === 'h' || (tool.axis === 'auto' && Math.abs(p[0] - drawA[0]) >= Math.abs(p[1] - drawA[1]))
+                      if (!moved && tool.axis === 'auto') return     // nur Klick: Richtung unbekannt
+                      if (hz) onLine?.(drawA[0], drawA[1], moved ? p[0] : drawA[0] + 0.5, drawA[1])
+                      else onLine?.(drawA[0], drawA[1], drawA[0], moved ? p[1] : drawA[1] + 0.5)
+                      return
+                    }
                     if (tool.kind !== 'box' || !drawA) return
                     const p = mm(e); setDrawA(null)
                     const small = Math.abs(p[0] - drawA[0]) < 3 && Math.abs(p[1] - drawA[1]) < 3

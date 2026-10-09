@@ -9,7 +9,7 @@ from shapely import affinity, contains_xy
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
 
-from ..schemas import Compartment, GripRecess, InsertSpec, ObjectSpec
+from ..schemas import Compartment, CompLine, GripRecess, InsertSpec, ObjectSpec
 from .gridfinity import FOOT_H, LIP_H, LIP_MARGIN, PITCH, UNIT_H, bin_outer, surface_z
 from .zones import Zone, compute_zones, zones_from_levels
 
@@ -43,6 +43,8 @@ class Comp:
     radius: float
     auto: bool = False
     free_depth: bool = False        # Tiefe folgt der Höhe (so tief wie möglich)
+    cell: int | None = None         # Feld aus Trennlinien (Index)
+    rep: tuple[float, float] | None = None   # Punkt im Feld (Spec-Koordinaten), zum Entfernen
 
 
 @dataclass
@@ -59,6 +61,7 @@ class Layout:
     zones: list[list[Zone]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     shift: tuple[float, float] = (0.0, 0.0)      # Verschiebung durch Zentrierung (auf alle Spec-Positionen)
+    lines: list[tuple[int, object]] = field(default_factory=list)   # (Index, verlängerte Trennlinie)
 
     @property
     def outer(self) -> tuple[float, float]:
@@ -389,6 +392,10 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
         for poly in auto_compartments(lay, spec):
             depth = spec.comp_depth if spec.comp_depth else lay.z_surface - need
             lay.comps.append(Comp(poly, max(lay.z_surface - depth, need), 3.0, auto=True))
+    if spec.comp_cells or spec.comp_lines:
+        z0 = need if not spec.comp_depth else max(lay.z_surface - spec.comp_depth, need)
+        for i, (poly, rep) in enumerate(compartment_cells(lay, spec)):
+            lay.comps.append(Comp(poly, z0, 1.5, auto=True, free_depth=not spec.comp_depth, cell=i, rep=rep))
     _check(lay, spec)
     return lay
 
@@ -532,3 +539,64 @@ def band_rect(free, axis: str, a: float, b: float, px: float, py: float, follow:
     y_a = below.bounds[3] if not below.is_empty else fy0
     y_b = above.bounds[1] if not above.is_empty else fy1
     return box(lo, y_a, hi, y_b) if y_b > y_a else None
+
+
+# ---- Kästen aus Trennlinien --------------------------------------------------------------
+
+def line_axis(ln: CompLine) -> str:
+    return "h" if abs(ln.x1 - ln.x0) >= abs(ln.y1 - ln.y0) else "v"
+
+
+def compartment_cells(lay: Layout, spec: InsertSpec):
+    """Freie Fläche (Innenbereich minus Taschen, Mulden, eigene Kästen, jeweils mit Wand) wird
+    durch die Trennlinien geteilt; jedes Feld ist ein Kasten. Jede Linie läuft (waagrecht oder
+    senkrecht eingerastet) vom gezeichneten Stück aus bis zum nächsten Hindernis: Werkzeug,
+    Rand oder eine früher gezeichnete Linie. Am Werkzeug folgt die Kastenwand dessen Kontur
+    (comp_follow), sonst wird jedes Feld zum größten geraden Rechteck.
+    Rückgabe [(Feld, Punkt darin in Spec-Koordinaten)]; setzt lay.lines."""
+    wall = max(spec.comp_wall, 0.8)
+    sx, sy = lay.shift
+    occ = [p.poly for p in lay.pieces] + [g.poly for g in lay.grips] + [c.poly for c in lay.comps if c.cell is None]
+    free = lay.inner.buffer(-0.01)
+    if occ:
+        free = free.difference(unary_union(occ).buffer(wall + 0.15, join_style=1))
+    big = 1e4
+    walls: list = []
+    lay.lines = []
+    for i, ln in enumerate(spec.comp_lines):
+        x0, y0, x1, y1 = ln.x0 + sx, ln.y0 + sy, ln.x1 + sx, ln.y1 + sy
+        h = line_axis(ln) == "h"
+        c = (y0 + y1) / 2 if h else (x0 + x1) / 2
+        lo, hi = (min(x0, x1), max(x0, x1)) if h else (min(y0, y1), max(y0, y1))
+        room = free.difference(unary_union(walls)) if walls else free
+        full = LineString([(-big, c), (big, c)] if h else [(c, -big), (c, big)]).intersection(room)
+        segs = [g for g in getattr(full, "geoms", [full]) if g.geom_type == "LineString" and g.length > 0.5]
+        drawn = LineString([(lo, c), (hi, c)] if h else [(c, lo), (c, hi)]).buffer(0.6)
+        hit = [g for g in segs if g.intersects(drawn)]
+        if not hit:
+            continue
+        b = unary_union(hit).bounds
+        a0, a1 = (b[0], b[2]) if h else (b[1], b[3])
+        seg = LineString([(a0, c), (a1, c)] if h else [(c, a0), (c, a1)])
+        lay.lines.append((i, seg))
+        walls.append(box(a0 - wall, c - wall / 2, a1 + wall, c + wall / 2) if h
+                     else box(c - wall / 2, a0 - wall, c + wall / 2, a1 + wall))
+    cells = free.difference(unary_union(walls)) if walls else free
+    skip = [Point(px + sx, py + sy) for px, py in spec.comp_skip]
+    out = []
+    for g in _polys(cells):
+        g = g.buffer(-1.0, join_style=1).buffer(1.0, join_style=1)
+        for q in _polys(g):
+            bx0, by0, bx1, by1 = q.bounds
+            if min(bx1 - bx0, by1 - by0) < 6 or q.area < 60:
+                continue
+            if not spec.comp_follow:
+                r = largest_rect(q)
+                if r is None:
+                    continue
+                q = r.buffer(-1.5, join_style=1).buffer(1.5, join_style=1)
+            if any(q.contains(p) for p in skip):
+                continue
+            rp = q.representative_point()
+            out.append((q.simplify(0.05), (round(rp.x - sx, 2), round(rp.y - sy, 2))))
+    return out

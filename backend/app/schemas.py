@@ -74,6 +74,15 @@ class Compartment(BaseModel):
     generated: bool = False                    # von 'Kästen erzeugen' angelegt (wird beim Neu-Erzeugen ersetzt)
 
 
+class CompLine(BaseModel):
+    """Trennlinie (wie gezeichnet, Spec-Koordinaten). Waagrecht oder senkrecht je nach Richtung;
+    im Layout bis zum nächsten Hindernis verlängert."""
+    x0: Coord
+    y0: Coord
+    x1: Coord
+    y1: Coord
+
+
 class ColorSlots(BaseModel):
     body: Slot = 1
     pocket: Slot = 2
@@ -116,7 +125,10 @@ class InsertSpec(BaseModel):
     comp_min_size: float = Field(20.0, ge=5, le=300)
     comp_wall: float = Field(1.6, ge=0.4, le=20)
     comp_depth: float | None = Field(None, ge=0, le=200)    # None = so tief wie möglich
-    comp_follow: bool = False          # Kastenwand folgt der Werkzeugkontur (sonst gerade Rechtecke)
+    comp_follow: bool = True           # Kastenwand folgt der Werkzeugkontur (sonst gerade Rechtecke)
+    comp_cells: bool = False           # freie Fläche mit Kästen füllen, durch Trennlinien geteilt
+    comp_lines: Annotated[list[CompLine], Field(max_length=60)] = []
+    comp_skip: Annotated[list[Point2], Field(max_length=100)] = []   # entfernte Felder (Punkt darin, Spec)
     placements: Annotated[list[Placement], Field(max_length=12)] = []
     grip_recesses: Annotated[list[GripRecess], Field(max_length=40)] = []
     compartments: Annotated[list[Compartment], Field(max_length=60)] = []

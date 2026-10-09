@@ -184,6 +184,12 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
       const t = e.target as HTMLElement
       if (!sel || (e.key !== 'Delete' && e.key !== 'Backspace') || t?.closest?.('input, textarea, select')) return
       e.preventDefault()
+      if (sel.kind === 'cell') {
+        const rep = layout.data?.compartments.find((c) => c.cell === sel.index)?.rep
+        if (rep) setSpec((s) => ({ ...s, comp_skip: [...s.comp_skip, rep] }))
+        select(null); return
+      }
+      if (sel.kind === 'line') { setSpec((s) => ({ ...s, comp_lines: s.comp_lines.filter((_, i) => i !== sel.index) })); select(null); return }
       setSpec((s) => ({
         ...s,
         placements: sel.kind === 'placement' ? s.placements.filter((_, i) => i !== sel.index) : s.placements,
@@ -194,18 +200,29 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [sel, compSel])
+  }, [sel, compSel, layout.data])
   // Zeichenwerkzeuge: Kasten aufziehen (Klick ohne Ziehen = freie Fläche füllen), gerader Schnitt
   const [tool, setTool] = useState<Tool>(null)
-  // Standard: Linien quer zum ersten Werkzeug (senkrecht liegendes Werkzeug -> waagrechte Linien)
-  const defAxis: 'h' | 'v' = spec.placements.length && Math.abs(Math.sin((spec.placements[0].rot_deg * Math.PI) / 180)) > 0.7 ? 'h' : 'v'
-  const picking = tool?.kind === 'band'
-  const setPicking = (f: (v: boolean) => boolean) => setTool((t) => (f(t?.kind === 'band') ? { kind: 'band', axis: defAxis } : null))
   const compBand = useMutation({
     mutationFn: (v: { axis: 'h' | 'v'; a: number; b: number; x: number; y: number }) => api.compartmentBand(spec, v.axis, v.a, v.b, v.x, v.y),
     onSuccess: (r) => { patch({ compartments: r.compartments }); select({ kind: 'comp', index: r.compartments.length - 1 }) },
   })
   const onBand = (axis: 'h' | 'v', a: number, b: number, x: number, y: number) => compBand.mutate({ axis, a, b, x, y })
+  // Kästen aus Trennlinien: Linie in Spec-Koordinaten speichern, Felder berechnet das Layout
+  const onLine = (x0: number, y0: number, x1: number, y1: number) => {
+    const [dx, dy] = lay?.shift ?? [0, 0]
+    const r = (v: number) => Math.round(v * 10) / 10
+    setSpec((sp) => ({ ...sp, comp_cells: true, comp_lines: [...sp.comp_lines, { x0: r(x0 - dx), y0: r(y0 - dy), x1: r(x1 - dx), y1: r(y1 - dy) }] }))
+  }
+  const onLineMove = (i: number, d: number) => setSpec((sp) => ({
+    ...sp, comp_lines: sp.comp_lines.map((l, j) => {
+      if (j !== i) return l
+      const hz = Math.abs(l.x1 - l.x0) >= Math.abs(l.y1 - l.y0)
+      return hz ? { ...l, y0: l.y0 + d, y1: l.y1 + d } : { ...l, x0: l.x0 + d, x1: l.x1 + d }
+    }),
+  }))
+  const fillCells = () => { patch({ comp_cells: true }); setTool({ kind: 'line', axis: 'auto' }) }
+  const clearCells = () => { patch({ comp_cells: false, comp_lines: [], comp_skip: [] }); select(null); setTool(null) }
   const compAt = useMutation({
     mutationFn: (p: { x0: number; y0: number; x1: number; y1: number }) => p.x0 === p.x1 && p.y0 === p.y1
       ? api.compartmentAt(spec, p.x0, p.y0) : api.compartmentRect(spec, p.x0, p.y0, p.x1, p.y1),
@@ -289,17 +306,18 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               <NumberField label="Wandstärke" value={spec.comp_wall} step={0.1} min={0.8} onChange={(v) => patch({ comp_wall: v })} />
               <NumberField label="Tiefe (0 = max.)" value={spec.comp_depth ?? 0} step={1} min={0} onChange={(v) => patch({ comp_depth: v > 0 ? v : null })} />
             </div>
+            <Check label="Freie Fläche mit Kästen füllen" checked={spec.comp_cells} onChange={(v) => (v ? fillCells() : clearCells())} />
             <div className="flex gap-2 flex-wrap">
-              <button className="btn btn-sm" onClick={() => genComps.mutate()} disabled={genComps.isPending || !spec.placements.length}>
-                <SquaresFour size={14} /> {nGenerated ? 'Kästen neu erzeugen' : 'Kästen erzeugen'}
-              </button>
-              {nGenerated > 0 && <button className="btn btn-sm" onClick={clearComps}><Trash size={14} /> Alle {nGenerated} entfernen</button>}
+              <button className={`btn btn-sm ${tool?.kind === 'line' ? 'btn-on' : ''}`} onClick={() => setTool(tool?.kind === 'line' ? null : { kind: 'line', axis: 'auto' })}
+                disabled={!spec.placements.length}><Plus size={14} /> Trennlinie ziehen</button>
+              {spec.comp_lines.length > 0 && <button className="btn btn-sm" onClick={() => patch({ comp_lines: [] })}><Trash size={14} /> Alle Linien</button>}
+              {spec.comp_skip.length > 0 && <button className="btn btn-sm" onClick={() => patch({ comp_skip: [] })}>Entfernte Felder zurück ({spec.comp_skip.length})</button>}
             </div>
-            <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}>
-              <Plus size={14} /> Kasten zeichnen</button>
             <Check label="Kastenwand folgt der Werkzeugkontur" checked={spec.comp_follow} onChange={(v) => patch({ comp_follow: v })} />
-            <div className="hint mt-0">Aus: alle Kästen sind gerade Rechtecke, die bis an das Werkzeug reichen. Kasten zeichnen: zwei Linien setzen, dazwischen entsteht der Kasten.
-              Kästen anklicken: löschen (Entf), gerade teilen oder mit Shift-Klick verbinden.</div>
+            <div className="hint mt-0">Trennlinien sind gerade Wände: waagrecht oder senkrecht, jeweils bis zum Werkzeug, zum Rand oder zur nächsten Linie.
+              Jedes Feld dazwischen ist ein Kasten. Linie anklicken = verschieben oder löschen (Entf), Feld anklicken = entfernen (Entf).
+              Ohne Haken bei „folgt der Kontur“ wird jedes Feld zum größten geraden Rechteck.</div>
+            {nGenerated > 0 && <button className="btn btn-sm justify-self-start" onClick={clearComps}><Trash size={14} /> Ältere Kästen entfernen ({nGenerated})</button>}
             {compAt.isError && <Msg kind="err">{errText(compAt.error)}</Msg>}
             {genComps.isError && <Msg kind="err">{errText(genComps.error)}</Msg>}
             {compMsg && (
@@ -377,17 +395,16 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <button className="btn btn-sm" onClick={doArrange} disabled={!spec.placements.length} title="Objekte an die Innenecke rücken und untereinander anordnen"><Rows size={14} /> Anordnen</button>
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip} title="Greifmulde automatisch am Schwerpunkt setzen"><Plus size={14} /> Greifmulde</button>
-            <button className={`btn btn-sm ${picking ? 'btn-on' : ''}`} onClick={() => setPicking((v) => !v)} disabled={!spec.placements.length}
-              title="Zwei gerade Linien setzen: dazwischen entsteht ein gerader Kasten bis an das Werkzeug"><Plus size={14} /> Kasten</button>
+            <button className={`btn btn-sm ${spec.comp_cells ? 'btn-on' : ''}`} onClick={() => (spec.comp_cells ? clearCells() : fillCells())} disabled={!spec.placements.length}
+              title="Freie Fläche mit Kästen füllen, danach mit Trennlinien aufteilen"><SquaresFour size={14} /> Kästen</button>
+            <button className={`btn btn-sm ${tool?.kind === 'line' ? 'btn-on' : ''}`} onClick={() => setTool(tool?.kind === 'line' ? null : { kind: 'line', axis: 'auto' })}
+              disabled={!spec.placements.length} title="Gerade Trennlinie ziehen (waagrecht oder senkrecht)"><Plus size={14} /> Trennlinie</button>
 
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
               <CrosshairSimple size={14} /> Mittig{spec.auto_center ? ' (aktiv)' : ''}
             </button>
-            <button className="btn btn-sm" onClick={() => genComps.mutate()} disabled={genComps.isPending || !spec.placements.length}
-              title="Freie Flächen mit Kästen füllen; danach einzeln anklicken und löschen">
-              <SquaresFour size={14} /> {genComps.isPending ? 'Erzeuge …' : nGenerated ? 'Kästen neu' : 'Kästen erzeugen'}
-            </button>
+
           </div>
         )}
 
@@ -408,6 +425,12 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               {layout.isFetching && <div className="absolute inset-x-2 top-1"><BusyBar /></div>}
               {tool && (
                 <div className="absolute left-3 right-3 bottom-3 z-10 pointer-events-none grid gap-2 justify-items-start">
+                  {tool.kind === 'line' && (
+                    <div className="pointer-events-auto panel p-1">
+                      <Segmented value={tool.axis} onChange={(a) => setTool({ kind: 'line', axis: a })}
+                        options={[{ value: 'auto', label: 'Wie gezogen' }, { value: 'h', label: 'Waagrecht' }, { value: 'v', label: 'Senkrecht' }]} />
+                    </div>
+                  )}
                   {tool.kind === 'band' && (
                     <div className="pointer-events-auto panel p-1">
                       <Segmented value={tool.axis} onChange={(a) => setTool({ kind: 'band', axis: a })}
@@ -416,13 +439,15 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
                   )}
                   <Msg kind="info">{tool.kind === 'box'
                     ? 'Rechteck aufziehen. Esc bricht ab.'
-                    : tool.kind === 'band'
-                      ? 'Erste Linie setzen, dann zweite Linie auf der Seite, wo der Kasten hin soll. Dazwischen entsteht ein gerader Kasten bis an das Werkzeug. Weitere Kästen: einfach weiterklicken. Esc beendet.'
+                    : tool.kind === 'line'
+                      ? 'Trennlinie ziehen: rastet waagrecht oder senkrecht ein und läuft bis zum Werkzeug, zum Rand oder zur nächsten Linie. Die Felder dazwischen sind die Kästen. Esc beendet.'
+                      : tool.kind === 'band'
+                      ? 'Erste Linie setzen, dann zweite Linie auf der Seite, wo der Kasten hin soll. Esc beendet.'
                       : `In den Kasten klicken: dort wird er ${tool.axis === 'h' ? 'waagrecht' : 'senkrecht'} gerade geteilt. Esc bricht ab.`}</Msg>
                 </div>
               )}
               <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={select} onMove={move} selectedComps={compSel}
-                tool={tool} onBox={onBox} onCut={onCut} onBand={onBand}
+                tool={tool} onBox={onBox} onCut={onCut} onBand={onBand} onLine={onLine} onLineMove={onLineMove}
                 onPocketClick={(pi, x, y) => {
                   // Klickpunkt -> Position entlang der Werkzeugachse (objekt-lokal x)
                   const pl = spec.placements[pi]; const [sx0, sy0] = lay?.shift ?? [0, 0]
@@ -552,6 +577,40 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
       <div className="hint mt-0">Ein Element im Layout anklicken, um Position, Drehung und Maße genau einzustellen.</div>
     </div>
   )
+  if (sel.kind === 'cell') {
+    const c = lay?.compartments.find((q) => q.cell === sel.index)
+    const b = c?.polygons[0]?.exterior
+    const w = b ? Math.max(...b.map((q) => q[0])) - Math.min(...b.map((q) => q[0])) : 0
+    const l = b ? Math.max(...b.map((q) => q[1])) - Math.min(...b.map((q) => q[1])) : 0
+    return (
+      <div className="grid gap-2">
+        <h3 className="sect">Kasten (Feld)</h3>
+        <div className="num hint mt-0">ca. {Math.round(w)} x {Math.round(l)} mm, {c ? (c.max_depth ? `so tief wie möglich (${c.depth.toFixed(1)} mm)` : `${c.depth.toFixed(1)} mm tief`) : ''}</div>
+        <div className="hint mt-0">Die Form ergibt sich aus Trennlinien, Rand und Werkzeug. Zum Teilen eine Trennlinie hindurchziehen. Tiefe für alle Kästen links.</div>
+        <button className="btn btn-sm justify-self-start" onClick={() => {
+          if (c?.rep) setSpec((s) => ({ ...s, comp_skip: [...s.comp_skip, c.rep!] }))
+          onSel(null)
+        }}><Trash size={14} /> Feld entfernen</button>
+      </div>
+    )
+  }
+  if (sel.kind === 'line') {
+    const ln = spec.comp_lines[sel.index]
+    if (!ln) return null
+    const hz = Math.abs(ln.x1 - ln.x0) >= Math.abs(ln.y1 - ln.y0)
+    const at = hz ? (ln.y0 + ln.y1) / 2 : (ln.x0 + ln.x1) / 2
+    const setAt = (v: number) => setSpec((s) => ({ ...s, comp_lines: s.comp_lines.map((q, i) => (i !== sel.index ? q
+      : hz ? { ...q, y0: v, y1: v } : { ...q, x0: v, x1: v })) }))
+    return (
+      <div className="grid gap-2">
+        <h3 className="sect">Trennlinie ({hz ? 'waagrecht' : 'senkrecht'})</h3>
+        <NumberField label={hz ? 'Lage Y' : 'Lage X'} value={Math.round(at * 10) / 10} step={1} onChange={setAt} />
+        <div className="hint mt-0">Mit der Maus quer verschieben oder hier genau eingeben. Die Linie läuft immer bis zum nächsten Hindernis.</div>
+        <button className="btn btn-sm justify-self-start" onClick={() => { setSpec((s) => ({ ...s, comp_lines: s.comp_lines.filter((_, i) => i !== sel.index) })); onSel(null) }}>
+          <Trash size={14} /> Linie löschen</button>
+      </div>
+    )
+  }
   if (sel.kind === 'comp' && compSel.length > 1) return (
     <div className="grid gap-2">
       <h3 className="sect">{compSel.length} Kästen ausgewählt</h3>

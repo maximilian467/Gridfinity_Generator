@@ -16,7 +16,9 @@ router = APIRouter(prefix="/inserts", tags=["inserts"])
 def _polys(g) -> list[dict]:
     if g.is_empty:
         return []
+    from shapely.geometry.polygon import orient
     geoms = [g] if isinstance(g, Polygon) else list(g.geoms) if isinstance(g, MultiPolygon) else []
+    geoms = [orient(p, 1.0) for p in geoms]           # außen gegen, Löcher im Uhrzeigersinn (Füllregel)
     return [{"exterior": [list(c) for c in p.exterior.coords],
              "holes": [[list(c) for c in h.coords] for h in p.interiors]} for p in geoms]
 
@@ -41,7 +43,9 @@ def layout_payload(spec: InsertSpec) -> dict:
                    "placement": g.placement, "rounded": g.rounded,
                    "params": g.params.model_dump() if g.params else None} for g in lay.grips],
         "compartments": [{"z0": c.z0, "depth": lay.z_surface - c.z0, "polygons": _polys(c.poly), "auto": c.auto,
-                          "max_depth": c.free_depth} for c in lay.comps],
+                          "max_depth": c.free_depth, "cell": c.cell, "rep": list(c.rep) if c.rep else None}
+                         for c in lay.comps],
+        "lines": [{"index": i, "coords": [list(p) for p in seg.coords]} for i, seg in lay.lines],
         "shift": list(lay.shift),
         "zones": [[{"a": z.a, "b": z.b, "floor": z.floor} for z in zs] for zs in lay.zones],
         "warnings": lay.warnings,
