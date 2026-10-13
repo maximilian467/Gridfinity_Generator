@@ -103,13 +103,23 @@ def test_account_recognized_by_sub_not_email(g):
     assert r.headers["location"] == "/?login=error"
 
 
-def test_links_existing_local_account(g):
+def test_links_existing_local_admin_listed_in_admin_emails(g):
     with db.session() as s:
-        s.add(User(email="lokal@example.com", role="admin", status="active"))
-    r = sign_in(g, "600", "lokal@example.com")
+        s.add(User(email="zweite@example.com", role="admin", status="active"))
+    r = sign_in(g, "600", "zweite@example.com")
     assert r.headers["location"] == "/"
     with db.session() as s:
-        assert s.scalar(select(User).where(User.email == "lokal@example.com")).google_sub == "600"
+        assert s.scalar(select(User).where(User.email == "zweite@example.com")).google_sub == "600"
+
+
+def test_cannot_take_over_local_admin(g):
+    """Google-Konto mit der Adresse des Notfall-Admins (nicht in ADMIN_EMAILS) darf ihn nicht übernehmen."""
+    with db.session() as s:
+        s.add(User(email="notfall@example.com", role="admin", status="active"))
+    r = sign_in(g, "650", "notfall@example.com")
+    assert r.headers["location"] == "/?login=error" and auth.COOKIE not in r.headers.get("set-cookie", "")
+    with db.session() as s:
+        assert s.scalar(select(User).where(User.email == "notfall@example.com")).google_sub is None
 
 
 def test_wrong_state_rejected(g):

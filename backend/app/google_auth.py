@@ -75,6 +75,10 @@ def upsert_user(info: dict, ip: str = "") -> tuple[str, int | None]:
             u = s.scalar(select(User).where(User.email == email))
             if u is not None and u.google_sub not in (None, sub):
                 return "error", None                     # Adresse gehört schon zu einem anderen Google-Konto
+            if u is not None and u.role == "admin" and not is_admin:
+                # Ein Google-Konto lässt sich mit jeder fremden Adresse anlegen, deren Postfach man hat
+                # (z. B. admin@admin.com). Admin-Konten daher nur verknüpfen, wenn die Adresse in ADMIN_EMAILS steht.
+                return "error", None
             if u is not None:
                 u.google_sub = sub                       # vorhandenes Konto (z. B. Notfall-Admin) verknüpfen
         if u is None:
