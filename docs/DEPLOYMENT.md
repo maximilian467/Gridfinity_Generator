@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Server | `ubuntu@100.91.112.44` (Tailscale, Hostname `buntu-1`) |
+| Server | `ubuntu@buntu-1` (Tailscale) |
 | Code | `~/apps/gridfinity` (Git-Repo, Push von Windows über das Remote `minipc`) |
 | Container | `gridfinity`, lauscht nur auf `127.0.0.1:8090` |
 | Öffentlich | Tailscale Funnel, `https://buntu-1.tail8569e8.ts.net` (Port 443, HTTPS, kostenlos) |
@@ -17,7 +17,7 @@ Auf Windows im Projektordner:
 
 ```powershell
 git push minipc HEAD:main
-ssh ubuntu@100.91.112.44 "cd ~/apps/gridfinity && docker compose up -d --build"
+ssh ubuntu@buntu-1 "cd ~/apps/gridfinity && docker compose up -d --build"
 ```
 
 Die Datenbank wird beim Start automatisch angelegt bzw. migriert (Alembic).

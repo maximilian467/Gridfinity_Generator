@@ -9,3 +9,8 @@ __pycache__/
 .claude/settings.local.json
 docs/samples/candidates/
 .env
+.claude/skills/
+.claude/launch.json
+# Referenzmodell (Herkunft/Lizenz ungeklaert), nur lokal
+docs/samples/*.stl
+docs/samples/*.webp

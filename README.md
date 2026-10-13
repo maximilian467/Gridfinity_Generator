@@ -21,3 +21,7 @@ Plan und Konventionen: `docs/PLAN.md`, `CLAUDE.md`. Synthetische Testfotos: `scr
 
 ## Betrieb auf dem Mini-PC
 Docker-Container auf `buntu-1` (Tailscale), öffentlich per Tailscale Funnel. Login mit Google (neue Konten schaltet ein Admin frei) oder Notfall-Admin aus `.env`. Details und Update-Befehle: `docs/DEPLOYMENT.md`.
+
+## Lizenz
+[AGPL-3.0](LICENSE). Die Segmentierung nutzt [Ultralytics](https://github.com/ultralytics/ultralytics) (AGPL-3.0);
+wer die App verändert und als Dienst im Netz anbietet, muss den Quellcode der veränderten Fassung den Nutzern zugänglich machen.
