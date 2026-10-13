@@ -33,6 +33,8 @@ CSP = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe
 
 @asynccontextmanager
 async def lifespan(_app):
+    from . import db
+    db.engine()              # Datenbank anlegen/migrieren, bevor Anfragen kommen
     yield
     from . import jobs
     jobs.shutdown()          # Prozesspool nicht blockierend beenden (sonst hängt --reload)
