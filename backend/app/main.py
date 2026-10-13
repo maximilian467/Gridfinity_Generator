@@ -1,18 +1,19 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, google_auth
+from . import auth, google_auth, storage
 from .api import baseplates as baseplates_api
 from .api import inserts as inserts_api
 from .api import jobs as jobs_api
 from .api import objects as objects_api
+from .api import users as users_api
 from .config import DATA_DIR, FRONTEND_DIST
 
 DEV = os.environ.get("APP_ENV", "dev") == "dev"
@@ -93,6 +94,8 @@ async def runtime_error(_request: Request, exc: RuntimeError):
     from .jobs import Busy
     if isinstance(exc, Busy):
         return JSONResponse({"detail": str(exc)}, status_code=429)
+    if isinstance(exc, storage.TooMany):
+        return JSONResponse({"detail": str(exc)}, status_code=409)
     return JSONResponse({"detail": "Interner Fehler"}, status_code=500)
 
 
@@ -105,12 +108,15 @@ def health() -> dict[str, str]:
 
 
 @api.get("/files/{path:path}")
-def files(path: str) -> FileResponse:
+def files(path: str, user: auth.Principal = Depends(auth.current_user)) -> FileResponse:
     root = DATA_DIR.resolve()
     f = (root / path).resolve()
     parts = f.relative_to(root).parts if root in f.parents else ()
     if (not parts or parts[0] not in FILE_DIRS or any(p.startswith(".") for p in parts)
             or f.suffix.lower() not in FILE_TYPES or not f.is_file()):
+        raise HTTPException(404, "Datei nicht gefunden")
+    found, owner = storage.owner_of_path(parts)      # Besitzer aus object.json / insert.json / job.json
+    if not found or not storage.can_access(owner, user):
         raise HTTPException(404, "Datei nicht gefunden")
     # sandbox: falls je aktive Inhalte (SVG) dabei sind, laufen sie nicht im Kontext der App
     return FileResponse(f, headers={"Cache-Control": "no-cache", "Content-Security-Policy": "sandbox"})
@@ -122,6 +128,7 @@ api.include_router(objects_api.router)
 api.include_router(inserts_api.router)
 api.include_router(jobs_api.router)
 api.include_router(baseplates_api.router)
+api.include_router(users_api.router)
 app.include_router(api)
 
 

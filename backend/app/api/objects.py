@@ -4,12 +4,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from typing import Annotated
 
 from pydantic import BaseModel, Field
 
 from .. import storage
+from ..auth import Principal, current_user
 from ..geometry.samples import synthetic_pliers
 from ..schemas import ObjectSpec, Profile
 from ..vision import a4, contour, exif, hands, pose, profile, segment
@@ -30,9 +31,9 @@ async def _read_limited(file: UploadFile, limit: int) -> bytes:
 PREVIEW_MAX = 2000        # Anzeigebild des Originals
 
 
-def _obj(oid: str) -> ObjectSpec:
+def _obj(oid: str, user: Principal) -> ObjectSpec:
     try:
-        return storage.load_object(oid)
+        return storage.load_object(oid, user)
     except KeyError:
         raise HTTPException(404, "Objekt nicht gefunden") from None
 
@@ -105,46 +106,47 @@ class NameBody(BaseModel):
 
 
 @router.post("", response_model=ObjectSpec)
-def create(body: NameBody) -> ObjectSpec:
-    return storage.create_object(body.name.strip() or "Neues Objekt")
+def create(body: NameBody, user: Principal = Depends(current_user)) -> ObjectSpec:
+    return storage.create_object(body.name.strip() or "Neues Objekt", user)
 
 
 @router.post("/demo", response_model=ObjectSpec)
-def create_demo() -> ObjectSpec:
+def create_demo(user: Principal = Depends(current_user)) -> ObjectSpec:
     demo = synthetic_pliers()
-    spec = storage.create_object("Spitzzange (Demo)", contour_mm=demo.contour_mm, length_mm=demo.length_mm,
+    spec = storage.create_object("Spitzzange (Demo)", user, contour_mm=demo.contour_mm, length_mm=demo.length_mm,
                                  width_mm=demo.width_mm, profile=demo.profile)
     return spec
 
 
 @router.get("", response_model=list[ObjectSpec])
-def list_() -> list[ObjectSpec]:
-    return storage.list_objects()
+def list_(all: bool = False, user: Principal = Depends(current_user)) -> list[ObjectSpec]:
+    return storage.list_objects(user, all_=all)
 
 
 @router.get("/{oid}", response_model=ObjectSpec)
-def get(oid: str) -> ObjectSpec:
-    return _obj(oid)
+def get(oid: str, user: Principal = Depends(current_user)) -> ObjectSpec:
+    return _obj(oid, user)
 
 
 @router.put("/{oid}", response_model=ObjectSpec)
-def rename(oid: str, body: NameBody) -> ObjectSpec:
-    spec = _obj(oid)
+def rename(oid: str, body: NameBody, user: Principal = Depends(current_user)) -> ObjectSpec:
+    spec = _obj(oid, user)
     spec.name = body.name.strip() or spec.name
     storage.save_object(spec)
     return spec
 
 
 @router.delete("/{oid}")
-def delete(oid: str) -> dict:
+def delete(oid: str, user: Principal = Depends(current_user)) -> dict:
+    _obj(oid, user)
     storage.delete_object(oid)
     return {"ok": True}
 
 
 @router.post("/{oid}/photos/{view}")
-async def upload_photo(oid: str, view: str, file: UploadFile = File(...)) -> dict:
+async def upload_photo(oid: str, view: str, file: UploadFile = File(...), user: Principal = Depends(current_user)) -> dict:
     _check_view(view)
-    spec = _obj(oid)
+    spec = _obj(oid, user)
     d = storage.object_dir(oid)
     ext = Path(file.filename or "x.jpg").suffix.lower() or ".jpg"
     if ext not in PHOTO_TYPES:
@@ -176,11 +178,11 @@ async def upload_photo(oid: str, view: str, file: UploadFile = File(...)) -> dic
 
 
 @router.put("/{oid}/photos/{view}/corners")
-def set_corners(oid: str, view: str, body: CornersBody) -> dict:
+def set_corners(oid: str, view: str, body: CornersBody, user: Principal = Depends(current_user)) -> dict:
     _check_view(view)
     if len(body.corners_px) != 4:
         raise HTTPException(422, "4 Ecken erwartet")
-    spec = _obj(oid)
+    spec = _obj(oid, user)
     bgr, f35, _ = _load(spec, view)
     _process_corners(spec, view, bgr, f35, a4.order_corners(np.array(body.corners_px, np.float32)))
     storage.save_object(spec)
@@ -239,9 +241,9 @@ def _rect_of(spec: ObjectSpec, view: str) -> np.ndarray:
 
 
 @router.post("/{oid}/photos/{view}/segment")
-def run_segment(oid: str, view: str, body: SegmentBody) -> dict:
+def run_segment(oid: str, view: str, body: SegmentBody, user: Principal = Depends(current_user)) -> dict:
     _check_view(view)
-    spec = _obj(oid)
+    spec = _obj(oid, user)
     ph = _photo(spec, view)
     rect = _rect_of(spec, view)
     ph["prompts"] = {"pos": body.pos, "neg": body.neg}
@@ -271,9 +273,10 @@ def run_segment(oid: str, view: str, body: SegmentBody) -> dict:
 
 
 @router.put("/{oid}/photos/{view}/mask")
-async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_holes: bool = True) -> dict:
+async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_holes: bool = True,
+                      user: Principal = Depends(current_user)) -> dict:
     _check_view(view)
-    spec = _obj(oid)
+    spec = _obj(oid, user)
     bgr, _, ph = _load(spec, view)
     raw = await _read_limited(file, MAX_MASK_BYTES)
     try:
@@ -304,11 +307,11 @@ class LevelsBody(BaseModel):
 
 
 @router.put("/{oid}/levels", response_model=ObjectSpec)
-def set_levels(oid: str, body: LevelsBody) -> ObjectSpec:
+def set_levels(oid: str, body: LevelsBody, user: Principal = Depends(current_user)) -> ObjectSpec:
     """Ebenen von Hand setzen, ohne die Fotos neu auszuwerten (schnell; geht auch für die Demo).
     Die Höhen gelten im aktuellen Bezug; wird eine Ebene die tiefste, wandert alles mit,
     d. h. das Werkzeug ist dort entsprechend dicker."""
-    spec = _obj(oid)
+    spec = _obj(oid, user)
     if spec.profile is None:
         raise HTTPException(409, "Objekt hat noch kein Profil")
     pr = spec.profile
@@ -327,8 +330,8 @@ def set_levels(oid: str, body: LevelsBody) -> ObjectSpec:
 
 
 @router.post("/{oid}/profile", response_model=ObjectSpec)
-def compute_profile(oid: str, body: ProfileBody) -> ObjectSpec:
-    spec = _obj(oid)
+def compute_profile(oid: str, body: ProfileBody, user: Principal = Depends(current_user)) -> ObjectSpec:
+    spec = _obj(oid, user)
     if body.side_flip_lr is not None or "side_flip_lr" in body.model_fields_set:
         spec.side_flip_lr = body.side_flip_lr
     if body.side_flip_ud is not None:

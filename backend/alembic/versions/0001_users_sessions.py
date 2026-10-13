@@ -25,6 +25,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("last_login_at", sa.DateTime(), nullable=True),
         sa.Column("approved_at", sa.DateTime(), nullable=True),
+        sqlite_autoincrement=True,
     )
     op.create_table(
         "sessions",

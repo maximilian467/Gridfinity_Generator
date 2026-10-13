@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from shapely.geometry import MultiPolygon, Polygon
 
 from .. import build_tasks, jobs, storage
+from ..auth import Principal, current_user
 from ..geometry.layout import compute_layout
 from ..schemas import InsertSpec
 
@@ -23,9 +24,9 @@ def _polys(g) -> list[dict]:
              "holes": [[list(c) for c in h.coords] for h in p.interiors]} for p in geoms]
 
 
-def layout_payload(spec: InsertSpec) -> dict:
+def layout_payload(spec: InsertSpec, user: Principal) -> dict:
     try:
-        objects = storage.objects_for(spec)
+        objects = storage.objects_for(spec, user)
     except KeyError as e:
         raise HTTPException(404, f"Objekt {e} nicht gefunden") from e
     for o in objects.values():
@@ -50,59 +51,70 @@ def layout_payload(spec: InsertSpec) -> dict:
     }
 
 
+def _body_spec(iid: str, spec: InsertSpec | None, user: Principal) -> InsertSpec:
+    """Spec aus dem Body (ungespeicherte Änderungen) oder gespeichert; die Einlage muss dem Nutzer gehören."""
+    saved = get(iid, user)
+    return spec.model_copy(update={"id": iid, "owner_id": saved.owner_id}) if spec else saved
+
+
 @router.post("", response_model=InsertSpec)
-def create(spec: InsertSpec) -> InsertSpec:
-    return storage.create_insert(spec)
+def create(spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertSpec:
+    storage.check_placements(spec, user)
+    return storage.create_insert(spec, user)
 
 
 @router.get("", response_model=list[InsertSpec])
-def list_() -> list[InsertSpec]:
-    return storage.list_inserts()
+def list_(all: bool = False, user: Principal = Depends(current_user)) -> list[InsertSpec]:
+    return storage.list_inserts(user, all_=all)
 
 
 @router.get("/{iid}", response_model=InsertSpec)
-def get(iid: str) -> InsertSpec:
+def get(iid: str, user: Principal = Depends(current_user)) -> InsertSpec:
     try:
-        return storage.load_insert(iid)
+        return storage.load_insert(iid, user)
     except KeyError:
         raise HTTPException(404, "Einlage nicht gefunden") from None
 
 
 @router.put("/{iid}", response_model=InsertSpec)
-def put(iid: str, spec: InsertSpec) -> InsertSpec:
-    spec = spec.model_copy(update={"id": iid})
+def put(iid: str, spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertSpec:
+    old = get(iid, user)
+    storage.check_placements(spec, user)
+    spec = spec.model_copy(update={"id": iid, "owner_id": old.owner_id})
     storage.save_insert(spec)
     return spec
 
 
 @router.delete("/{iid}")
-def delete(iid: str) -> dict:
+def delete(iid: str, user: Principal = Depends(current_user)) -> dict:
+    get(iid, user)
     storage.delete_insert(iid)
     return {"ok": True}
 
 
 @router.post("/{iid}/duplicate", response_model=InsertSpec)
-def duplicate(iid: str) -> InsertSpec:
-    spec = get(iid)
-    return storage.create_insert(spec.model_copy(update={"name": spec.name + " (Kopie)"}, deep=True))
+def duplicate(iid: str, user: Principal = Depends(current_user)) -> InsertSpec:
+    spec = get(iid, user)
+    return storage.create_insert(spec.model_copy(update={"name": spec.name + " (Kopie)"}, deep=True), user)
 
 
 @router.post("/{iid}/layout")
-def layout(iid: str, spec: InsertSpec | None = None) -> dict:
+def layout(iid: str, spec: InsertSpec | None = None, user: Principal = Depends(current_user)) -> dict:
     """Schnelles 2D-Layout; optional mit ungespeicherter Spec im Body (Live-Vorschau)."""
-    return layout_payload(spec.model_copy(update={"id": iid}) if spec else get(iid))
+    return layout_payload(_body_spec(iid, spec, user), user)
 
 
 @router.post("/{iid}/auto-compartments")
-def auto_compartments(iid: str, spec: InsertSpec | None = None) -> dict:
+def auto_compartments(iid: str, spec: InsertSpec | None = None, user: Principal = Depends(current_user)) -> dict:
     """Vorschläge für Kästen in den freien Flächen (frei geformt, Wand folgt der Kontur)."""
     from ..geometry.layout import auto_compartments
     from ..schemas import Compartment
 
-    spec = spec.model_copy(update={"id": iid}) if spec else get(iid)
-    layout_payload(spec)
+    spec = _body_spec(iid, spec, user)
+    layout_payload(spec, user)
     keep = [c for c in spec.compartments if not c.generated]
-    lay = compute_layout(spec.model_copy(update={"auto_compartments": False, "compartments": keep}), storage.objects_for(spec))
+    lay = compute_layout(spec.model_copy(update={"auto_compartments": False, "compartments": keep}),
+                         storage.objects_for(spec, user))
     sx, sy = lay.shift
     depth = round(spec.comp_depth, 1) if spec.comp_depth else None
     out = []
@@ -130,12 +142,12 @@ class CompEdit(BaseModel):
     at: float = Field(0.0, ge=-2000, le=2000)    # cut: Lage des Schnitts (Spec-Koordinaten)
 
 
-def _free_area(spec: InsertSpec, keep_idx: set[int]):
+def _free_area(spec: InsertSpec, keep_idx: set[int], user: Principal):
     """Innenbereich minus Taschen/Mulden/übrige Fächer (+ Wand): dort dürfen Kästen liegen."""
     from shapely import affinity
     from shapely.ops import unary_union
     others = [c for i, c in enumerate(spec.compartments) if i not in keep_idx]
-    lay = compute_layout(spec.model_copy(update={"compartments": others}), storage.objects_for(spec))
+    lay = compute_layout(spec.model_copy(update={"compartments": others}), storage.objects_for(spec, user))
     occ = [p.poly for p in lay.pieces] + [g.poly for g in lay.grips] + [c.poly for c in lay.comps]
     wall = max(spec.comp_wall, 0.8) + 0.15
     free = lay.inner.buffer(-0.01)
@@ -146,14 +158,14 @@ def _free_area(spec: InsertSpec, keep_idx: set[int]):
 
 
 @router.post("/{iid}/compartments/edit")
-def edit_compartments(iid: str, body: CompEdit) -> dict:
+def edit_compartments(iid: str, body: CompEdit, user: Principal = Depends(current_user)) -> dict:
     """Kästen verbinden (inkl. der Wand dazwischen) oder in gleich große Fächer teilen."""
     from shapely.geometry import Polygon, box
     from shapely.ops import unary_union
     from ..geometry.layout import comp_polygon
     from ..schemas import Compartment
 
-    spec = body.spec.model_copy(update={"id": iid})
+    spec = _body_spec(iid, body.spec, user)
     idx = sorted({i for i in body.indices if 0 <= i < len(spec.compartments)})
     if body.op == "cut" and idx:
         p = comp_polygon(spec.compartments[idx[0]])
@@ -179,7 +191,7 @@ def edit_compartments(iid: str, body: CompEdit) -> dict:
     if not idx or (body.op == "merge" and len(idx) < 2):
         raise HTTPException(422, "Zum Verbinden mindestens zwei Kästen auswählen")
     polys = [comp_polygon(spec.compartments[i]) for i in idx]
-    free, wall = _free_area(spec, set(idx))
+    free, wall = _free_area(spec, set(idx), user)
     ds = [spec.compartments[i].depth for i in idx if spec.compartments[i].depth is not None]
     depth = min(ds) if ds else None
 
@@ -239,7 +251,7 @@ class CompAt(BaseModel):
 
 
 @router.post("/{iid}/compartments/at")
-def compartment_at(iid: str, body: CompAt) -> dict:
+def compartment_at(iid: str, body: CompAt, user: Principal = Depends(current_user)) -> dict:
     """Einzelnen Kasten anlegen: füllt die freie Fläche um den Klickpunkt (Wand folgt der
     Kontur, Abstand = Wandstärke). Danach teilbar/verbindbar wie die erzeugten Kästen."""
     from shapely import affinity
@@ -248,9 +260,9 @@ def compartment_at(iid: str, body: CompAt) -> dict:
     from ..geometry.layout import auto_compartments
     from ..schemas import Compartment
 
-    spec = body.spec.model_copy(update={"id": iid})
-    layout_payload(spec)
-    lay = compute_layout(spec.model_copy(update={"auto_compartments": False}), storage.objects_for(spec))
+    spec = _body_spec(iid, body.spec, user)
+    layout_payload(spec, user)
+    lay = compute_layout(spec.model_copy(update={"auto_compartments": False}), storage.objects_for(spec, user))
     pt = Point(body.x, body.y)
     # dieselben Vorgaben wie 'Kästen erzeugen' (größte freie Rechtecke, an die Kontur gewachsen),
     # davon der Kasten unter dem Klickpunkt
@@ -277,7 +289,7 @@ class CompRect(BaseModel):
 
 
 @router.post("/{iid}/compartments/rect")
-def compartment_rect(iid: str, body: CompRect) -> dict:
+def compartment_rect(iid: str, body: CompRect, user: Principal = Depends(current_user)) -> dict:
     """Kasten zeichnen: Rechteck um die gezeichnete Linie (z. B. ein L vom Rand zur Werkzeugspitze
     und hoch zum oberen Rand). Kanten näher als 8 mm am Innenrand rasten am Rand ein. Wo das
     Rechteck über Werkzeug, Mulde oder einen anderen Kasten reicht, endet der Kasten mit
@@ -288,10 +300,10 @@ def compartment_rect(iid: str, body: CompRect) -> dict:
     from ..geometry.layout import _polys
     from ..schemas import Compartment
 
-    spec = body.spec.model_copy(update={"id": iid})
-    layout_payload(spec)
-    free, _ = _free_area(spec, set())                      # Spec-Koordinaten
-    lay = compute_layout(spec, storage.objects_for(spec))
+    spec = _body_spec(iid, body.spec, user)
+    layout_payload(spec, user)
+    free, _ = _free_area(spec, set(), user)                # Spec-Koordinaten
+    lay = compute_layout(spec, storage.objects_for(spec, user))
     ix0, iy0, ix1, iy1 = lay.inner.bounds
     snap = 8.0
     x0, x1 = sorted((body.x0, body.x1))
@@ -328,10 +340,10 @@ def compartment_rect(iid: str, body: CompRect) -> dict:
 
 
 @router.post("/{iid}/build")
-def build(iid: str, spec: InsertSpec | None = None) -> dict:
-    spec = spec.model_copy(update={"id": iid}) if spec else get(iid)
-    layout_payload(spec)                         # validiert Objekte
-    objects = {k: v.model_dump_json() for k, v in storage.objects_for(spec).items()}
+def build(iid: str, spec: InsertSpec | None = None, user: Principal = Depends(current_user)) -> dict:
+    spec = _body_spec(iid, spec, user)
+    layout_payload(spec, user)                   # validiert Objekte
+    objects = {k: v.model_dump_json() for k, v in storage.objects_for(spec, user).items()}
     job_id = jobs.submit("insert", build_tasks.build_insert_job, storage.insert_dir(iid) / "out",
-                         spec.model_dump_json(), objects)
+                         spec.model_dump_json(), objects, owner=user)
     return {"job_id": job_id}

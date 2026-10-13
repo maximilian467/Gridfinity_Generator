@@ -32,6 +32,7 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = {"sqlite_autoincrement": True}    # IDs nie wiederverwenden (owner_id in den JSON-Dateien)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(200), unique=True)          # immer klein geschrieben
