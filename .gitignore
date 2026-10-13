@@ -14,3 +14,5 @@ docs/samples/candidates/
 # Referenzmodell (Herkunft/Lizenz ungeklaert), nur lokal
 docs/samples/*.stl
 docs/samples/*.webp
+# Launch-Video (/brag), nur lokal
+brag-output*/
