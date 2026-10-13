@@ -12,6 +12,8 @@ from html import escape
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
+from . import auth
+
 router = APIRouter(include_in_schema=False)
 
 STYLE = """
@@ -89,6 +91,10 @@ an Dritte weitergegeben.</p>
 <h2>Speicherdauer</h2>
 <p>Konto und Inhalte bleiben gespeichert, bis du die Löschung verlangst oder ein Administrator das Konto löscht.
 Dabei werden auch alle deine Inhalte gelöscht. Sitzungen enden spätestens nach 30 Tagen ohne Nutzung.</p>
+
+<h2>Quellcode</h2>
+<p>Die App ist Open Source (AGPL-3.0). Den Quellcode findest du unter
+<a href="{escape(auth.source_url())}" rel="noopener">{escape(auth.source_url())}</a>.</p>
 
 <h2>Deine Rechte</h2>
 <p>Du hast das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung, Datenübertragbarkeit und

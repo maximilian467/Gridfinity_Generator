@@ -150,7 +150,9 @@ def test_local_login_needs_strong_password_in_prod(secured, monkeypatch):
 
 
 def test_bruteforce_limited(secured, monkeypatch):
-    monkeypatch.setattr(auth.time, "sleep", lambda s: None)
+    async def no_wait(_s):
+        return None
+    monkeypatch.setattr(auth.asyncio, "sleep", no_wait)
     for _ in range(auth.LIMIT):
         secured.post("/api/auth/login", json={"email": "admin@admin.com", "password": "x"})
     assert login(secured).status_code == 429          # auch das richtige Passwort wird jetzt geblockt
@@ -241,3 +243,23 @@ def test_privacy_page_public(secured, monkeypatch):
     assert r.status_code == 200 and "Datenschutzerklärung" in r.text
     assert "Erika &lt;Muster&gt;" in r.text and "mailto:erika@example.com" in r.text
     assert "default-src 'self'" in r.headers["content-security-policy"]
+
+
+def test_client_ip_not_spoofable(monkeypatch):
+    from starlette.requests import Request
+    monkeypatch.setenv("TRUST_PROXY", "1")
+    scope = {"type": "http", "client": ("172.18.0.1", 1), "headers": [
+        (b"x-forwarded-for", b"6.6.6.6, 203.0.113.9"), (b"cf-connecting-ip", b"7.7.7.7")]}
+    assert auth.client_ip(Request(scope)) == "203.0.113.9"      # nur der vom Proxy angehängte Eintrag
+
+
+def test_auth_cannot_be_disabled_in_prod(monkeypatch):
+    monkeypatch.setenv("AUTH_DISABLED", "1")
+    monkeypatch.setenv("APP_ENV", "prod")
+    assert auth.enabled()
+    assert TestClient(app).get("/api/objects").status_code == 401
+
+
+def test_api_not_cached(open_client):
+    assert open_client.get("/api/objects").headers["cache-control"] == "no-store"
+    assert "github.com" in open_client.get("/api/auth/config").json()["source"]

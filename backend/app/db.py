@@ -58,6 +58,8 @@ def engine() -> Engine:
                 if u.startswith("sqlite"):
                     event.listen(eng, "connect", _sqlite_pragmas)
                 migrate(eng)
+                if u.startswith("sqlite:///"):              # Nutzer und Sitzungen: nur für den Besitzer lesbar
+                    Path(u.removeprefix("sqlite:///")).chmod(0o600)
                 _factory = sessionmaker(eng, expire_on_commit=False)
                 _engine = eng
     return _engine

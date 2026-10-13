@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import os
@@ -23,6 +24,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
+from starlette.concurrency import run_in_threadpool
 
 from . import config, db
 from .models import AuditLog, Session, User, utcnow
@@ -38,7 +40,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def enabled() -> bool:
-    return os.environ.get("AUTH_DISABLED", "") not in ("1", "true", "yes")
+    # in Produktion nie abschaltbar (Schutz gegen ein versehentliches AUTH_DISABLED in der .env)
+    return not dev_mode() or os.environ.get("AUTH_DISABLED", "") not in ("1", "true", "yes")
 
 
 def dev_mode() -> bool:
@@ -59,6 +62,11 @@ def local_login_enabled() -> bool:
     return dev_mode() or len(_password()) >= 16
 
 
+def source_url() -> str:
+    """Link zum Quellcode (AGPL-3.0: Nutzer des Dienstes müssen an den Quellcode kommen)."""
+    return os.environ.get("SOURCE_URL", "https://github.com/maximilian467/Gridfinity_Generator")
+
+
 def secure_cookies() -> bool:
     return os.environ.get("COOKIE_SECURE", "") in ("1", "true")
 
@@ -77,6 +85,7 @@ def _key() -> bytes:
             f.parent.mkdir(parents=True, exist_ok=True)
             if not f.exists():
                 f.write_text(secrets.token_hex(32), encoding="ascii")
+            f.chmod(0o600)                           # nur für den Besitzer lesbar (auch bei älteren Dateien)
             _secret = f.read_text(encoding="ascii").strip().encode()
     return _secret
 
@@ -212,8 +221,14 @@ WINDOW, LIMIT = 600.0, 10
 def _too_many(ip: str) -> bool:
     now = time.time()
     with _lock:
+        if len(_fails) > 5000:                      # Speicher begrenzen: abgelaufene Einträge entfernen
+            for k in [k for k, v in _fails.items() if not v or now - v[-1] >= WINDOW]:
+                del _fails[k]
         lst = [t for t in _fails.get(ip, []) if now - t < WINDOW]
-        _fails[ip] = lst
+        if lst:
+            _fails[ip] = lst
+        else:
+            _fails.pop(ip, None)
         return len(lst) >= LIMIT
 
 
@@ -223,11 +238,12 @@ def _fail(ip: str) -> None:
 
 
 def client_ip(request: Request) -> str:
-    # Header nur hinter einem eigenen Proxy/Tunnel auswerten (TRUST_PROXY=1), sonst fälschbar
+    """IP des Besuchers. X-Forwarded-For nur hinter dem eigenen Proxy (TRUST_PROXY=1) und dann nur den
+    letzten Eintrag: den hängt der Proxy (Tailscale) selbst an, alles davor kann der Besucher fälschen."""
     if os.environ.get("TRUST_PROXY", "") in ("1", "true"):
-        fwd = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "")
+        fwd = request.headers.get("x-forwarded-for", "")
         if fwd.strip():
-            return fwd.split(",")[0].strip()[:64]
+            return fwd.split(",")[-1].strip()[:64]
     return (request.client.host if request.client else "?")[:64]
 
 
@@ -240,11 +256,12 @@ class LoginBody(BaseModel):
 @router.get("/config")
 def auth_config() -> dict:
     from . import google_auth
-    return {"auth": enabled(), "google": google_auth.configured(), "local": local_login_enabled()}
+    return {"auth": enabled(), "google": google_auth.configured(), "local": local_login_enabled(),
+            "source": source_url()}
 
 
 @router.post("/login")
-def login(body: LoginBody, request: Request, response: Response) -> dict:
+async def login(body: LoginBody, request: Request, response: Response) -> dict:
     """Notfall-Admin aus APP_USER / APP_PASSWORD."""
     if not local_login_enabled():
         raise HTTPException(403, "Die Anmeldung mit Passwort ist abgeschaltet")
@@ -255,8 +272,15 @@ def login(body: LoginBody, request: Request, response: Response) -> dict:
     ok_pw = hmac.compare_digest(body.password.encode(), _password().encode())
     if not (ok_user and ok_pw):
         _fail(ip)
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)        # bremst, ohne einen Arbeits-Thread zu blockieren
         raise HTTPException(401, "E-Mail oder Passwort falsch")
+    uid = await run_in_threadpool(_local_admin_id)
+    set_cookie(response, await run_in_threadpool(create_session, uid, request))
+    await run_in_threadpool(audit, "login_local", _user(), uid, ip)
+    return {"user": _user()}
+
+
+def _local_admin_id() -> int:
     with db.session() as s:
         u = s.scalar(select(User).where(User.email == _user()))
         if u is None:
@@ -266,10 +290,7 @@ def login(body: LoginBody, request: Request, response: Response) -> dict:
         if u.status == "disabled":
             raise HTTPException(403, "Dieses Konto ist gesperrt")
         u.role, u.status = "admin", "active"
-        uid = u.id
-    set_cookie(response, create_session(uid, request))
-    audit("login_local", _user(), uid, ip)
-    return {"user": _user()}
+        return u.id
 
 
 @router.post("/logout")

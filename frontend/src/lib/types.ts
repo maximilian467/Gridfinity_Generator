@@ -107,7 +107,7 @@ export interface BaseplateSpec {
 }
 
 export interface Me { user: string; id: number; name: string; role: 'admin' | 'user'; auth: boolean }
-export interface AuthConfig { auth: boolean; google: boolean; local: boolean }
+export interface AuthConfig { auth: boolean; google: boolean; local: boolean; source?: string }
 export interface AdminUser {
   id: number; email: string; name: string; role: 'admin' | 'user'; status: 'pending' | 'active' | 'disabled'
   google: boolean; created_at: string; last_login_at: string | null; approved_at: string | null

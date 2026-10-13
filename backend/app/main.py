@@ -78,6 +78,8 @@ async def guard(request: Request, call_next):
         resp.headers.setdefault(k, v)
     if not path.startswith("/api/"):
         resp.headers.setdefault("Content-Security-Policy", CSP)
+    elif not path.startswith("/api/files/"):
+        resp.headers.setdefault("Cache-Control", "no-store")    # persönliche Daten nicht zwischenspeichern
     if request.headers.get("x-forwarded-proto") == "https" or os.environ.get("COOKIE_SECURE") == "1":
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     return resp
