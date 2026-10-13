@@ -4,7 +4,7 @@ export interface SegmentResult {
   edit_contour_px?: [number, number][]
 }
 
-import type { BaseplateSpec, InsertSpec, Job, LayoutOut, ObjectSpec, PhotoMeta } from './types'
+import type { AdminUser, AuditEntry, AuthConfig, BaseplateSpec, InsertSpec, Job, LayoutOut, Me, ObjectSpec, PhotoMeta } from './types'
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch('/api' + url, init)
@@ -24,9 +24,16 @@ const json = (method: string, body?: unknown): RequestInit => ({
 })
 
 export const api = {
-  me: () => req<{ user: string; auth: boolean }>('/auth/me'),
+  me: () => req<Me>('/auth/me'),
+  authConfig: () => req<AuthConfig>('/auth/config'),
   logout: () => req('/auth/logout', json('POST')),
-  objects: () => req<ObjectSpec[]>('/objects'),
+  logoutAll: () => req('/auth/logout-all', json('POST')),
+  users: () => req<AdminUser[]>('/admin/users'),
+  changeUser: (id: number, body: { status?: 'active' | 'disabled'; role?: 'admin' | 'user' }) =>
+    req<AdminUser>(`/admin/users/${id}`, json('PUT', body)),
+  deleteUser: (id: number) => req<{ ok: boolean; removed: number }>(`/admin/users/${id}`, json('DELETE')),
+  audit: () => req<AuditEntry[]>('/admin/audit?limit=60'),
+  objects: (all = false) => req<ObjectSpec[]>(all ? '/objects?all=true' : '/objects'),
   object: (id: string) => req<ObjectSpec>(`/objects/${id}`),
   createObject: (name: string) => req<ObjectSpec>('/objects', json('POST', { name })),
   createDemo: () => req<ObjectSpec>('/objects/demo', json('POST')),
@@ -49,7 +56,7 @@ export const api = {
   profile: (id: string, body: Record<string, unknown>) => req<ObjectSpec>(`/objects/${id}/profile`, json('POST', body)),
   setLevels: (id: string, levels: [number, number, number][]) => req<ObjectSpec>(`/objects/${id}/levels`, json('PUT', { levels })),
 
-  inserts: () => req<InsertSpec[]>('/inserts'),
+  inserts: (all = false) => req<InsertSpec[]>(all ? '/inserts?all=true' : '/inserts'),
   insert: (id: string) => req<InsertSpec>(`/inserts/${id}`),
   createInsert: (spec: Partial<InsertSpec>) => req<InsertSpec>('/inserts', json('POST', spec)),
   saveInsert: (spec: InsertSpec) => req<InsertSpec>(`/inserts/${spec.id}`, json('PUT', spec)),

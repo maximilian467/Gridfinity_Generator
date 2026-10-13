@@ -1,14 +1,20 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 import { Copy, Cube, Plus, Scan, Trash } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
-import { Empty, Silhouette } from '../../components/ui'
+import { Check, Empty, Silhouette } from '../../components/ui'
 
 export function Library() {
   const nav = useNavigate()
   const qc = useQueryClient()
-  const objects = useQuery({ queryKey: ['objects'], queryFn: api.objects })
-  const inserts = useQuery({ queryKey: ['inserts'], queryFn: api.inserts })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
+  const isAdmin = me.data?.role === 'admin'
+  const [all, setAll] = useState(false)
+  const showAll = isAdmin && all
+  const objects = useQuery({ queryKey: ['objects', showAll ? 'all' : 'mine'], queryFn: () => api.objects(showAll) })
+  const inserts = useQuery({ queryKey: ['inserts', showAll ? 'all' : 'mine'], queryFn: () => api.inserts(showAll) })
+  const foreign = (owner?: number | null) => showAll && owner != null && owner !== me.data?.id
   const refresh = () => { qc.invalidateQueries({ queryKey: ['objects'] }); qc.invalidateQueries({ queryKey: ['inserts'] }) }
 
   const scan = useMutation({
@@ -26,6 +32,9 @@ export function Library() {
 
   return (
     <div className="max-w-[1200px] mx-auto px-4 py-6 grid gap-10">
+      {isAdmin && me.data?.auth && (
+        <div className="-mb-6 flex justify-end"><Check label="Daten aller Nutzer zeigen" checked={all} onChange={setAll} /></div>
+      )}
       <section className="panel p-4 grid gap-3 md:grid-cols-3">
         {[
           ['1', 'Werkzeug scannen', 'Zwei Fotos auf einem A4-Blatt: von oben und hochkant. Das Blatt ist der Maßstab.'],
@@ -62,6 +71,7 @@ export function Library() {
               <article key={o.id} className="panel p-3 grid gap-2">
                 <Silhouette contour={o.contour_mm} className="w-full h-32" />
                 <div className="font-medium truncate">{o.name}</div>
+                {foreign(o.owner_id) && <span className="chip w-fit text-xs">anderer Nutzer</span>}
                 <div className="num text-xs" style={{ color: 'var(--ink-2)' }}>
                   {o.profile ? `${o.length_mm.toFixed(1)} x ${o.width_mm.toFixed(1)} mm` : 'noch nicht fertig gescannt'}
                 </div>
@@ -96,6 +106,7 @@ export function Library() {
                   style={{ color: 'var(--ink)', font: 'inherit', fontWeight: 500 }} onClick={() => nav(`/insert/${i.id}`)}>
                   {i.name}
                 </button>
+                {foreign(i.owner_id) && <span className="chip text-xs">anderer Nutzer</span>}
                 <span className="num text-xs" style={{ color: 'var(--ink-2)' }}>
                   {i.grid_x ?? 'auto'} x {i.grid_y ?? 'auto'} · {i.height_mm ? `${i.height_mm} mm` : i.height_u ? `${i.height_u} U` : 'Höhe auto'} · {i.placements.length} Objekt(e)
                 </span>

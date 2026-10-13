@@ -27,6 +27,7 @@ export interface PhotoMeta {
 export interface ObjectSpec {
   id: string
   name: string
+  owner_id?: number | null
   created_at: string
   contour_mm: [number, number][]
   length_mm: number
@@ -49,6 +50,7 @@ export interface Compartment { x: number; y: number; w: number; l: number; radiu
 export interface InsertSpec {
   id: string
   name: string
+  owner_id?: number | null
   grid_x: number | null
   grid_y: number | null
   height_u: number | null
@@ -103,3 +105,12 @@ export interface BaseplateSpec {
   drawer_x: number; drawer_y: number; bed_x: number; bed_y: number
   clearance: number; magnets: boolean; one_sided: boolean
 }
+
+export interface Me { user: string; id: number; name: string; role: 'admin' | 'user'; auth: boolean }
+export interface AuthConfig { auth: boolean; google: boolean; local: boolean }
+export interface AdminUser {
+  id: number; email: string; name: string; role: 'admin' | 'user'; status: 'pending' | 'active' | 'disabled'
+  google: boolean; created_at: string; last_login_at: string | null; approved_at: string | null
+  objects: number; inserts: number
+}
+export interface AuditEntry { ts: string; actor: string; action: string; target: string; ip: string }

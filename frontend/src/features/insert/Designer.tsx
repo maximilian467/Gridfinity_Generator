@@ -64,7 +64,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const [jobId, setJobId] = useState<string | null>(null)
   const patch = (p: Partial<InsertSpec>) => setSpec((s) => ({ ...s, ...p }))
 
-  const objects = useQuery({ queryKey: ['objects'], queryFn: api.objects })
+  const objects = useQuery({ queryKey: ['objects'], queryFn: () => api.objects(true) })
   const objMap = useMemo(() => Object.fromEntries((objects.data ?? []).map((o) => [o.id, o])) as Record<string, ObjectSpec>, [objects.data])
 
   // Autosave

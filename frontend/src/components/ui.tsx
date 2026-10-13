@@ -168,3 +168,12 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
     </div>
   )
 }
+
+export function Initials({ name, size = 32 }: { name: string; size?: number }) {
+  const parts = name.replace(/@.*/, '').split(/[\s._-]+/).filter(Boolean)
+  const txt = ((parts[0]?.[0] ?? '?') + (parts[1]?.[0] ?? '')).toUpperCase()
+  return (
+    <span className="grid place-items-center shrink-0 rounded-full font-semibold text-xs"
+      style={{ width: size, height: size, background: 'var(--accent-soft)', color: 'var(--accent)' }}>{txt}</span>
+  )
+}
