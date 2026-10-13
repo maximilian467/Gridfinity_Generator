@@ -128,6 +128,7 @@ export function Login({ onDone }: { onDone: () => void }) {
                 </button>
               </form>
             )}
+            <a className="text-xs justify-self-start" href="/datenschutz" style={{ color: 'var(--ink-3)' }}>Datenschutz</a>
             {!cfg.google && !cfg.local && (
               <Msg kind="warn">Es ist keine Anmeldung eingerichtet. Bitte GOOGLE_CLIENT_ID/SECRET oder ein starkes APP_PASSWORD setzen.</Msg>
             )}

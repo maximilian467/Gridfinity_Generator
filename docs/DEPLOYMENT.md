@@ -35,15 +35,17 @@ Die Datenbank wird beim Start automatisch angelegt bzw. migriert (Alembic).
 ### Google einrichten (einmalig)
 
 1. <https://console.cloud.google.com> → neues Projekt (z. B. „Gridfinity“).
-2. **APIs & Dienste → OAuth-Zustimmungsbildschirm**: Typ „Extern“, App-Name, Support-Adresse.
-   Bereiche nur `openid`, `email`, `profile`. Danach **„App veröffentlichen“** (Status „In Produktion“).
-   Im Testmodus kommen nur eingetragene Testnutzer rein. Für diese Basis-Bereiche prüft Google nichts.
+2. **APIs & Dienste → OAuth-Zustimmungsbildschirm** (Google Auth Platform): Typ „Extern“, App-Name, Support-Adresse.
+   Unter **Branding**: kein Logo (sonst verlangt Google eine Überprüfung), Startseite
+   `https://buntu-1.tail8569e8.ts.net`, Datenschutzerklärung `https://buntu-1.tail8569e8.ts.net/datenschutz`,
+   autorisierte Domain `tail8569e8.ts.net`. Danach unter **Zielgruppe** „App veröffentlichen“ (Status „In Produktion“).
+   Im Testmodus kommen nur eingetragene Testnutzer rein. Für die Basis-Bereiche (Name, E-Mail) prüft Google nichts.
 3. **APIs & Dienste → Anmeldedaten → OAuth-Client-ID erstellen**, Typ „Webanwendung“.
    Autorisierte Weiterleitungs-URIs:
    - `https://buntu-1.tail8569e8.ts.net/api/auth/google/callback`
    - für die Entwicklung `http://localhost:5183/api/auth/google/callback` (Vite-Port aus `scripts/dev.ps1`)
 4. Client-ID und Secret auf dem Server in `~/apps/gridfinity/.env` eintragen (Vorlage `.env.example`), dazu
-   `PUBLIC_BASE_URL`, `ADMIN_EMAILS` und ein langes `APP_PASSWORD`. Dann `docker compose up -d`.
+   `PUBLIC_BASE_URL`, `ADMIN_EMAILS`, `CONTACT_NAME`/`CONTACT_EMAIL` (für `/datenschutz`) und ein langes `APP_PASSWORD`. Dann `docker compose up -d`.
 
 ## Nützliche Befehle (auf dem Server)
 

@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, google_auth, storage
+from . import auth, google_auth, legal, storage
 from .api import baseplates as baseplates_api
 from .api import inserts as inserts_api
 from .api import jobs as jobs_api
@@ -130,6 +130,7 @@ api.include_router(jobs_api.router)
 api.include_router(baseplates_api.router)
 api.include_router(users_api.router)
 app.include_router(api)
+app.include_router(legal.router)         # /datenschutz (öffentlich, vor der SPA-Weiche)
 
 
 if FRONTEND_DIST.is_dir():

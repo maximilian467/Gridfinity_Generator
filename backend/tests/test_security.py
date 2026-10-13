@@ -232,3 +232,12 @@ def test_ids_rejected_directly():
 def test_csp_allows_wasm_but_not_eval(open_client):
     from app.main import CSP
     assert "'wasm-unsafe-eval'" in CSP and "'unsafe-eval'" not in CSP.replace("'wasm-unsafe-eval'", "")
+
+
+def test_privacy_page_public(secured, monkeypatch):
+    monkeypatch.setenv("CONTACT_NAME", "Erika <Muster>")
+    monkeypatch.setenv("CONTACT_EMAIL", "erika@example.com")
+    r = secured.get("/datenschutz")                     # ohne Anmeldung erreichbar
+    assert r.status_code == 200 and "Datenschutzerklärung" in r.text
+    assert "Erika &lt;Muster&gt;" in r.text and "mailto:erika@example.com" in r.text
+    assert "default-src 'self'" in r.headers["content-security-policy"]
