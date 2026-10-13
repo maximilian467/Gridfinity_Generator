@@ -1,27 +1,38 @@
-"""Einfacher Login: eine Kennung aus Umgebungsvariablen, signiertes Session-Cookie.
+"""Anmeldung: Nutzer und Sitzungen in der Datenbank, Cookie mit zufälligem Sitzungs-Token.
 
-APP_USER / APP_PASSWORD (Default admin@admin.com / admin), SECRET_KEY (sonst zufällig und in
-data/.secret abgelegt), COOKIE_SECURE=1 hinter HTTPS. AUTH_DISABLED=1 schaltet den Login ab
-(nur für Tests/Entwicklung).
+- Google-Login (OIDC) in google_auth.py; neue Konten warten auf Freischaltung durch einen Admin.
+- Notfall-Admin: APP_USER / APP_PASSWORD (POST /api/auth/login). In Produktion nur aktiv, wenn
+  das Passwort mindestens 16 Zeichen hat; LOCAL_LOGIN=0 schaltet ihn ganz ab.
+- In der DB steht nur der SHA-256 des Tokens; Abmelden/Sperren widerruft Sitzungen sofort.
+- SECRET_KEY (sonst zufällig in data/.secret) signiert nur das kurzlebige OAuth-Cookie.
+- COOKIE_SECURE=1 hinter HTTPS. AUTH_DISABLED=1 schaltet den Login ab (Tests/Entwicklung):
+  dann ist jede Anfrage ein lokaler Admin.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import os
 import secrets
 import threading
 import time
+from dataclasses import dataclass
+from datetime import timedelta
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import delete, select
 
-from . import config
+from . import config, db
+from .models import AuditLog, Session, User, utcnow
 
-COOKIE = "gf_session"
+COOKIE = "gf_sid"
 MAX_AGE = 30 * 24 * 3600
-PUBLIC = ("/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/me")
+REFRESH_AFTER = 3600            # gleitende Verlängerung höchstens einmal pro Stunde (spart Schreibzugriffe)
+PUBLIC = ("/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/me", "/api/auth/config",
+          "/api/auth/google/")
+DEV_ADMIN = "admin@local"
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -30,12 +41,26 @@ def enabled() -> bool:
     return os.environ.get("AUTH_DISABLED", "") not in ("1", "true", "yes")
 
 
+def dev_mode() -> bool:
+    return os.environ.get("APP_ENV", "dev") == "dev"
+
+
 def _user() -> str:
     return os.environ.get("APP_USER", "admin@admin.com").strip().lower()
 
 
 def _password() -> str:
     return os.environ.get("APP_PASSWORD", "admin")
+
+
+def local_login_enabled() -> bool:
+    if os.environ.get("LOCAL_LOGIN", "1").lower() in ("0", "false", "no"):
+        return False
+    return dev_mode() or len(_password()) >= 16
+
+
+def secure_cookies() -> bool:
+    return os.environ.get("COOKIE_SECURE", "") in ("1", "true")
 
 
 _secret: bytes | None = None
@@ -56,27 +81,126 @@ def _key() -> bytes:
     return _secret
 
 
-def make_token(user: str, now: float | None = None) -> str:
-    exp = int((time.time() if now is None else now) + MAX_AGE)
-    payload = base64.urlsafe_b64encode(f"{user}|{exp}".encode()).decode().rstrip("=")
-    sig = hmac.new(_key(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}.{sig}"
+# ---- Nutzer ------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Principal:
+    """Angemeldeter Nutzer (unabhängig von der DB-Sitzung weiterreichbar)."""
+    id: int
+    email: str
+    name: str
+    role: str
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+    @classmethod
+    def of(cls, u: User) -> Principal:
+        return cls(u.id, u.email, u.name, u.role)
 
 
-def check_token(token: str | None) -> str | None:
-    if not token or "." not in token:
-        return None
-    payload, sig = token.rsplit(".", 1)
-    good = hmac.new(_key(), payload.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, good):
-        return None
-    try:
-        user, exp = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode().split("|")
-        if int(exp) < time.time() or user != _user():
-            return None
-    except Exception:  # noqa: BLE001
-        return None
+def audit(action: str, target: str = "", actor: int | None = None, ip: str = "") -> None:
+    with db.session() as s:
+        s.add(AuditLog(action=action, target=target[:200], actor_id=actor, ip=ip[:64]))
+
+
+def _dev_admin() -> Principal:
+    with db.session() as s:
+        u = s.scalar(select(User).where(User.email == DEV_ADMIN))
+        if u is None:
+            u = User(email=DEV_ADMIN, name="Admin (lokal)", role="admin", status="active")
+            s.add(u)
+            s.flush()
+        return Principal.of(u)
+
+
+def current_user(request: Request) -> Principal:
+    if not enabled():
+        return _dev_admin()
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(401, "Nicht angemeldet")
     return user
+
+
+def require_admin(user: Principal = Depends(current_user)) -> Principal:
+    if not user.is_admin:
+        raise HTTPException(403, "Nur für Admins")
+    return user
+
+
+# ---- Sitzungen ---------------------------------------------------------------------------
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_session(user_id: int, request: Request) -> str:
+    token = secrets.token_urlsafe(32)
+    now = utcnow()
+    with db.session() as s:
+        s.execute(delete(Session).where(Session.expires_at < now))           # Aufräumen nebenbei
+        s.add(Session(token_hash=_hash(token), user_id=user_id, created_at=now, last_seen_at=now,
+                      expires_at=now + timedelta(seconds=MAX_AGE), ip=client_ip(request),
+                      user_agent=request.headers.get("user-agent", "")[:300]))
+        u = s.get(User, user_id)
+        if u is not None:
+            u.last_login_at = now
+    return token
+
+
+def user_for_token(token: str | None) -> tuple[Principal | None, bool]:
+    """(Nutzer, verlängert). Nur aktive Konten mit gültiger Sitzung zählen."""
+    if not token or len(token) > 200:
+        return None, False
+    now = utcnow()
+    with db.session() as s:
+        sess = s.get(Session, _hash(token))
+        if sess is None or sess.expires_at < now:
+            return None, False
+        u = s.get(User, sess.user_id)
+        if u is None or u.status != "active":
+            return None, False
+        refreshed = (now - sess.last_seen_at).total_seconds() > REFRESH_AFTER
+        if refreshed:
+            sess.last_seen_at = now
+            sess.expires_at = now + timedelta(seconds=MAX_AGE)
+        return Principal.of(u), refreshed
+
+
+def revoke(token: str | None) -> None:
+    if token:
+        with db.session() as s:
+            s.execute(delete(Session).where(Session.token_hash == _hash(token)))
+
+
+def revoke_all(user_id: int) -> None:
+    with db.session() as s:
+        s.execute(delete(Session).where(Session.user_id == user_id))
+
+
+def set_cookie(response: Response, token: str) -> None:
+    # Lax statt Strict: der Rücksprung von Google ist eine seitenübergreifende Navigation.
+    # Gegen CSRF prüft die Middleware zusätzlich den Origin-Header (origin_ok).
+    response.set_cookie(COOKIE, token, max_age=MAX_AGE, httponly=True, samesite="lax",
+                        secure=secure_cookies(), path="/")
+
+
+def origin_ok(request: Request) -> bool:
+    """Ändernde Anfragen nur von der eigenen Seite. Browser senden Origin bei POST/PUT/DELETE immer;
+    fehlt er, kommt die Anfrage nicht aus einem Browser (kein CSRF möglich)."""
+    origin = request.headers.get("origin")
+    if origin is None:
+        return True
+    netloc = urlsplit(origin).netloc.lower()
+    if not netloc:
+        return False                       # z. B. "null" aus Sandbox-Frames
+    allowed = {request.headers.get("host", "").lower()}
+    base = os.environ.get("PUBLIC_BASE_URL", "")
+    if base:
+        allowed.add(urlsplit(base).netloc.lower())
+    if dev_mode():
+        allowed |= {"localhost:5173", "127.0.0.1:5173", "localhost:5183"}
+    return netloc in allowed
 
 
 # ---- Schutz gegen Durchprobieren: max. 10 Fehlversuche je IP in 10 Minuten ----
@@ -107,13 +231,23 @@ def client_ip(request: Request) -> str:
     return (request.client.host if request.client else "?")[:64]
 
 
+# ---- Routen ------------------------------------------------------------------------------
 class LoginBody(BaseModel):
     email: str = Field(max_length=200)
     password: str = Field(max_length=200)
 
 
+@router.get("/config")
+def auth_config() -> dict:
+    from . import google_auth
+    return {"auth": enabled(), "google": google_auth.configured(), "local": local_login_enabled()}
+
+
 @router.post("/login")
 def login(body: LoginBody, request: Request, response: Response) -> dict:
+    """Notfall-Admin aus APP_USER / APP_PASSWORD."""
+    if not local_login_enabled():
+        raise HTTPException(403, "Die Anmeldung mit Passwort ist abgeschaltet")
     ip = client_ip(request)
     if _too_many(ip):
         raise HTTPException(429, "Zu viele Fehlversuche. Bitte in ein paar Minuten erneut versuchen.")
@@ -123,22 +257,42 @@ def login(body: LoginBody, request: Request, response: Response) -> dict:
         _fail(ip)
         time.sleep(0.5)
         raise HTTPException(401, "E-Mail oder Passwort falsch")
-    response.set_cookie(COOKIE, make_token(_user()), max_age=MAX_AGE, httponly=True, samesite="strict",
-                        secure=os.environ.get("COOKIE_SECURE", "") in ("1", "true"), path="/")
+    with db.session() as s:
+        u = s.scalar(select(User).where(User.email == _user()))
+        if u is None:
+            u = User(email=_user(), name="Admin", role="admin", status="active", approved_at=utcnow())
+            s.add(u)
+            s.flush()
+        if u.status == "disabled":
+            raise HTTPException(403, "Dieses Konto ist gesperrt")
+        u.role, u.status = "admin", "active"
+        uid = u.id
+    set_cookie(response, create_session(uid, request))
+    audit("login_local", _user(), uid, ip)
     return {"user": _user()}
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict:
+def logout(request: Request, response: Response) -> dict:
+    revoke(request.cookies.get(COOKIE))
     response.delete_cookie(COOKIE, path="/")
+    return {"ok": True}
+
+
+@router.post("/logout-all")
+def logout_all(request: Request, response: Response, user: Principal = Depends(current_user)) -> dict:
+    revoke_all(user.id)
+    response.delete_cookie(COOKIE, path="/")
+    audit("logout_all", user.email, user.id, client_ip(request))
     return {"ok": True}
 
 
 @router.get("/me")
 def me(request: Request) -> dict:
     if not enabled():
-        return {"user": _user(), "auth": False}
-    user = check_token(request.cookies.get(COOKIE))
-    if not user:
+        u = _dev_admin()
+        return {"user": u.email, "id": u.id, "name": u.name, "role": u.role, "auth": False}
+    u = getattr(request.state, "user", None)
+    if u is None:
         raise HTTPException(401, "Nicht angemeldet")
-    return {"user": user, "auth": True}
+    return {"user": u.email, "id": u.id, "name": u.name, "role": u.role, "auth": True}

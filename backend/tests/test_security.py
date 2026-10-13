@@ -39,9 +39,10 @@ def test_login_flow_and_cookie_flags(secured):
     r = login(secured)
     assert r.status_code == 200
     cookie = r.headers["set-cookie"].lower()
-    assert "httponly" in cookie and "samesite=strict" in cookie
+    assert "httponly" in cookie and "samesite=lax" in cookie
     assert secured.get("/api/objects").status_code == 200
-    assert secured.get("/api/auth/me").json()["user"] == "admin@admin.com"
+    me = secured.get("/api/auth/me").json()
+    assert me["user"] == "admin@admin.com" and me["role"] == "admin"
     secured.post("/api/auth/logout")
     secured.cookies.clear()
     assert secured.get("/api/objects").status_code == 401
@@ -52,15 +53,100 @@ def test_email_case_insensitive(secured):
     assert r.status_code == 200
 
 
-def test_tampered_or_foreign_cookie_rejected(secured):
-    tok = auth.make_token("admin@admin.com")
-    payload, sig = tok.rsplit(".", 1)
-    secured.cookies.set(auth.COOKIE, payload + "." + ("0" * len(sig)))
+def test_unknown_or_forged_session_rejected(secured):
+    for tok in ("x", "a" * 43, "a" * 500, auth._hash("irgendwas")):
+        secured.cookies.set(auth.COOKIE, tok)
+        assert secured.get("/api/objects").status_code == 401
+
+
+def test_logout_revokes_session_on_server(secured):
+    login(secured)
+    tok = secured.cookies.get(auth.COOKIE)
+    secured.post("/api/auth/logout")
+    secured.cookies.set(auth.COOKIE, tok)              # altes Cookie wiederverwenden (z. B. gestohlen)
     assert secured.get("/api/objects").status_code == 401
-    secured.cookies.set(auth.COOKIE, auth.make_token("someone@else.com"))
+
+
+def test_expired_session_rejected(secured):
+    from datetime import timedelta
+
+    from app import db
+    from app.models import Session, utcnow
+    login(secured)
+    tok = secured.cookies.get(auth.COOKIE)
+    with db.session() as s:
+        s.get(Session, auth._hash(tok)).expires_at = utcnow() - timedelta(seconds=1)
     assert secured.get("/api/objects").status_code == 401
-    secured.cookies.set(auth.COOKIE, auth.make_token("admin@admin.com", now=0))   # abgelaufen
-    assert secured.get("/api/objects").status_code == 401
+
+
+def test_session_slides(secured):
+    from datetime import timedelta
+
+    from app import db
+    from app.models import Session, utcnow
+    login(secured)
+    tok = secured.cookies.get(auth.COOKIE)
+    with db.session() as s:
+        sess = s.get(Session, auth._hash(tok))
+        sess.last_seen_at = utcnow() - timedelta(hours=2)
+        sess.expires_at = utcnow() + timedelta(hours=1)
+    r = secured.get("/api/objects")
+    assert r.status_code == 200 and auth.COOKIE in r.headers.get("set-cookie", "")
+    with db.session() as s:
+        assert s.get(Session, auth._hash(tok)).expires_at > utcnow() + timedelta(days=29)
+
+
+def test_disabled_user_loses_session(secured):
+    from sqlalchemy import select
+
+    from app import db
+    from app.models import User
+    login(secured)
+    with db.session() as s:
+        s.scalar(select(User).where(User.email == "admin@admin.com")).status = "disabled"
+    try:
+        assert secured.get("/api/objects").status_code == 401
+        assert login(secured).status_code == 403
+    finally:
+        with db.session() as s:
+            s.scalar(select(User).where(User.email == "admin@admin.com")).status = "active"
+
+
+def test_logout_all(secured):
+    login(secured)
+    other = TestClient(app)
+    login(other)
+    assert secured.post("/api/auth/logout-all").status_code == 200
+    assert other.get("/api/objects").status_code == 401
+
+
+def test_cross_site_requests_rejected(secured):
+    login(secured)
+    evil = {"origin": "https://evil.example"}
+    assert secured.post("/api/objects", json={"name": "x"}, headers=evil).status_code == 403
+    assert secured.post("/api/objects", json={"name": "x"}, headers={"origin": "null"}).status_code == 403
+    assert secured.post("/api/auth/login", json={"email": "a", "password": "b"}, headers=evil).status_code == 403
+    ok = {"origin": "http://testserver"}
+    assert secured.post("/api/objects", json={"name": "x"}, headers=ok).status_code == 200
+    assert secured.get("/api/objects", headers=evil).status_code == 200     # Lesen ist ungefährlich (CORS)
+
+
+def test_public_base_url_origin_allowed(secured, monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://buntu-1.example.ts.net")
+    login(secured)
+    r = secured.post("/api/objects", json={"name": "x"}, headers={"origin": "https://buntu-1.example.ts.net"})
+    assert r.status_code == 200
+
+
+def test_local_login_needs_strong_password_in_prod(secured, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "prod")
+    assert secured.get("/api/auth/config").json()["local"] is False
+    assert login(secured).status_code == 403
+    monkeypatch.setenv("APP_PASSWORD", "ein-langes-passwort-123")
+    r = secured.post("/api/auth/login", json={"email": "admin@admin.com", "password": "ein-langes-passwort-123"})
+    assert r.status_code == 200
+    monkeypatch.setenv("LOCAL_LOGIN", "0")
+    assert secured.get("/api/auth/config").json()["local"] is False
 
 
 def test_bruteforce_limited(secured, monkeypatch):

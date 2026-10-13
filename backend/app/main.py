@@ -5,8 +5,10 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth
+from . import auth, google_auth
 from .api import baseplates as baseplates_api
 from .api import inserts as inserts_api
 from .api import jobs as jobs_api
@@ -49,16 +51,28 @@ if DEV:
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5183"],
         allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
     )
+# nur für den Google-Login: state/nonce/PKCE zwischen Weiterleitung und Rücksprung (signiert, 10 min)
+app.add_middleware(SessionMiddleware, secret_key=auth._key().decode(), session_cookie=google_auth.STATE_COOKIE,
+                   max_age=600, path="/api/auth/google", same_site="lax", https_only=auth.secure_cookies())
 
 
 @app.middleware("http")
 async def guard(request: Request, call_next):
     path = request.url.path
-    if (auth.enabled() and path.startswith("/api/") and not path.startswith(auth.PUBLIC)
-            and not auth.check_token(request.cookies.get(auth.COOKIE))):
-        resp = JSONResponse({"detail": "Nicht angemeldet"}, status_code=401)
+    token, refreshed = request.cookies.get(auth.COOKIE), False
+    request.state.user = None
+    if path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS") and not auth.origin_ok(request):
+        resp = JSONResponse({"detail": "Anfrage von fremder Seite abgelehnt"}, status_code=403)
+    elif auth.enabled() and path.startswith("/api/") and path != "/api/health":
+        request.state.user, refreshed = await run_in_threadpool(auth.user_for_token, token)
+        if request.state.user is None and not path.startswith(auth.PUBLIC):
+            resp = JSONResponse({"detail": "Nicht angemeldet"}, status_code=401)
+        else:
+            resp = await call_next(request)
     else:
         resp = await call_next(request)
+    if refreshed and token and "set-cookie" not in resp.headers:
+        auth.set_cookie(resp, token)                 # gleitende Verlängerung auch im Browser
     for k, v in SECURITY_HEADERS.items():
         resp.headers.setdefault(k, v)
     if not path.startswith("/api/"):
@@ -103,6 +117,7 @@ def files(path: str) -> FileResponse:
 
 
 api.include_router(auth.router)
+api.include_router(google_auth.router)
 api.include_router(objects_api.router)
 api.include_router(inserts_api.router)
 api.include_router(jobs_api.router)
