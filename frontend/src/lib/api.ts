@@ -58,6 +58,8 @@ export const api = {
 
   inserts: (all = false) => req<InsertSpec[]>(all ? '/inserts?all=true' : '/inserts'),
   insert: (id: string) => req<InsertSpec>(`/inserts/${id}`),
+  setStandardHeight: (height_mm: number | null, source = '') =>
+    req<{ height_mm: number | null; source: string | null }>('/inserts/standard-height', json('PUT', { height_mm, source })),
   standardHeight: () => req<{ height_mm: number | null; source: string | null }>('/inserts/standard-height'),
   createInsert: (spec: Partial<InsertSpec>) => req<InsertSpec>('/inserts', json('POST', spec)),
   saveInsert: (spec: InsertSpec) => req<InsertSpec>(`/inserts/${spec.id}`, json('PUT', spec)),

@@ -244,3 +244,11 @@ def test_new_insert_gets_height_of_latest_pliers_insert():
     # ausdrücklich automatische Höhe bleibt automatisch
     auto = client.post("/api/inserts", json={"name": "Auto", "height_mm": None}).json()
     assert auto["height_mm"] is None
+
+
+def test_standard_height_can_be_set_by_hand():
+    r = client.put("/api/inserts/standard-height", json={"height_mm": 37.5, "source": "Einlage X"}).json()
+    assert r == {"height_mm": 37.5, "source": "Einlage X"}
+    assert client.post("/api/inserts", json={"name": "N"}).json()["height_mm"] == 37.5
+    client.put("/api/inserts/standard-height", json={"height_mm": None})
+    assert client.get("/api/inserts/standard-height").json()["height_mm"] != 37.5

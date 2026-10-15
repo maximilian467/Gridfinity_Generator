@@ -117,6 +117,26 @@ def delete_object(oid: str) -> None:
     shutil.rmtree(object_dir(oid), ignore_errors=True)
 
 
+# ---- Nutzereinstellungen ------------------------------------------------------
+def _settings_file(uid: int) -> Path:
+    return _root("settings") / f"user_{int(uid)}.json"
+
+
+def load_settings(user: Principal) -> dict:
+    f = _settings_file(user.id)
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(user: Principal, data: dict) -> dict:
+    cur = load_settings(user)
+    cur.update(data)
+    _settings_file(user.id).write_text(json.dumps(cur, ensure_ascii=False, indent=1), encoding="utf-8")
+    return cur
+
+
 # ---- Einlagen ---------------------------------------------------------------
 def _read_inserts() -> list[InsertSpec]:
     out = []

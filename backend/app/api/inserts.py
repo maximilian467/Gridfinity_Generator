@@ -62,8 +62,12 @@ STANDARD_RE = re.compile(r"spitz.*zange", re.I)
 
 
 def standard_height(user: Principal) -> tuple[float, str] | None:
-    """Standardhöhe neuer Einlagen: Gesamthöhe der zuletzt angelegten Einlage mit einer Spitzzange
-    (Name der Einlage oder eines ihrer Werkzeuge). So sind alle Einlagen gleich hoch."""
+    """Standardhöhe neuer Einlagen: von Hand festgelegt (Einstellung), sonst die Gesamthöhe der
+    zuletzt angelegten Einlage mit einer Spitzzange (Name der Einlage oder eines ihrer Werkzeuge).
+    So sind alle Einlagen gleich hoch."""
+    st = storage.load_settings(user)
+    if st.get("standard_height_mm"):
+        return float(st["standard_height_mm"]), str(st.get("standard_height_source") or "festgelegt")
     found = []
     for ins in storage.list_inserts(user):
         try:
@@ -88,6 +92,17 @@ def standard_height(user: Principal) -> tuple[float, str] | None:
 def get_standard_height(user: Principal = Depends(current_user)) -> dict:
     std = standard_height(user)
     return {"height_mm": std[0] if std else None, "source": std[1] if std else None}
+
+
+class StandardHeightBody(BaseModel):
+    height_mm: float | None = Field(None, ge=10, le=250)     # None = wieder automatisch (Spitzzange)
+    source: str = Field("", max_length=120)
+
+
+@router.put("/standard-height")
+def set_standard_height(body: StandardHeightBody, user: Principal = Depends(current_user)) -> dict:
+    storage.save_settings(user, {"standard_height_mm": body.height_mm, "standard_height_source": body.source})
+    return get_standard_height(user)
 
 
 @router.post("", response_model=InsertSpec)

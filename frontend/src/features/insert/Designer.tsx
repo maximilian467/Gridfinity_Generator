@@ -78,6 +78,10 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const objects = useQuery({ queryKey: ['objects'], queryFn: () => api.objects(true) })
   const std = useQuery({ queryKey: ['standard-height'], queryFn: api.standardHeight, staleTime: 60_000 })
   const stdH = std.data?.height_mm ?? null
+  const setStd = useMutation({
+    mutationFn: (h: number) => api.setStandardHeight(h, spec.name),
+    onSuccess: (r) => qc.setQueryData(['standard-height'], r),
+  })
   const [dismissed, dismiss, undismiss] = useDismissed(initial.id)
   const objMap = useMemo(() => Object.fromEntries((objects.data ?? []).map((o) => [o.id, o])) as Record<string, ObjectSpec>, [objects.data])
 
@@ -260,12 +264,16 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <NumberField label="Gesamthöhe" step={1} min={10} value={spec.height_mm} onChange={(v) => patch({ height_mm: v, height_u: null })}
               hint={spec.stacking_lip ? 'inkl. Stapelrand (3,8 mm), ohne Werkzeug' : 'ohne Werkzeug'} />
           )}
-          {stdH !== null && (
-            <div className="hint mt-0 flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span>Standardhöhe <span className="num">{stdH.toFixed(1).replace('.', ',')} mm</span> (aus „{std.data?.source}“): alle Einlagen gleich hoch.</span>
-              {spec.height_mm !== stdH && <button className="btn btn-sm" onClick={() => patch({ height_mm: stdH, height_u: null })}>Standardhöhe verwenden</button>}
-            </div>
-          )}
+          <div className="hint mt-0 flex flex-wrap items-center gap-x-2 gap-y-1">
+            {stdH !== null
+              ? <span>Standardhöhe <span className="num">{stdH.toFixed(1).replace('.', ',')} mm</span> (aus „{std.data?.source}“): neue Einlagen bekommen diese Höhe.</span>
+              : <span>Noch keine Standardhöhe: neue Einlagen wählen ihre Höhe selbst.</span>}
+            {stdH !== null && spec.height_mm !== stdH && <button className="btn btn-sm" onClick={() => patch({ height_mm: stdH, height_u: null })}>Standardhöhe verwenden</button>}
+            {lay && Math.abs((stdH ?? 0) - Math.round(lay.total_height * 10) / 10) > 0.05 && (
+              <button className="btn btn-sm" disabled={setStd.isPending} onClick={() => setStd.mutate(Math.round(lay.total_height * 10) / 10)}
+                title="Gesamthöhe dieser Einlage als Standard für alle neuen Einlagen festlegen">Diese Höhe als Standard</button>
+            )}
+          </div>
           {spec.height_u !== null && spec.height_mm === null && (
             <NumberField label="Höhe" unit="U (7 mm)" step={1} min={1} value={spec.height_u} onChange={(v) => patch({ height_u: Math.round(v) })} />
           )}
