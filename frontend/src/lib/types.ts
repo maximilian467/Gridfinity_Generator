@@ -51,6 +51,7 @@ export interface InsertSpec {
   id: string
   name: string
   owner_id?: number | null
+  created_at?: string
   grid_x: number | null
   grid_y: number | null
   height_u: number | null

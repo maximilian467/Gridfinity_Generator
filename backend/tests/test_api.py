@@ -231,3 +231,16 @@ def test_draw_two_corner_boxes_with_wall():
     assert 1.5 <= A.distance(B) <= 2.5                         # eine Wand dazwischen
     tool = Polygon(lay2["pieces"][-1]["polygons"][0]["exterior"])
     assert A.distance(tool) < 3 and B.distance(tool) < 3      # beide reichen bis an die Spitze
+
+
+def test_new_insert_gets_height_of_latest_pliers_insert():
+    demo = client.post("/api/objects/demo").json()
+    pl = [{"object_id": demo["id"], "x": 10, "y": 10}]
+    client.post("/api/inserts", json={"name": "Alt", "placements": pl, "height_mm": 30})
+    client.post("/api/inserts", json={"name": "Spitzzange neu", "placements": pl, "height_mm": 42})
+    assert client.get("/api/inserts/standard-height").json()["height_mm"] == 42
+    new = client.post("/api/inserts", json={"name": "Neue Einlage"}).json()
+    assert new["height_mm"] == 42 and new["created_at"]
+    # ausdrücklich automatische Höhe bleibt automatisch
+    auto = client.post("/api/inserts", json={"name": "Auto", "height_mm": None}).json()
+    assert auto["height_mm"] is None

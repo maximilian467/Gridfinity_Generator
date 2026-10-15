@@ -129,9 +129,19 @@ def _read_inserts() -> list[InsertSpec]:
 def create_insert(spec: InsertSpec, owner: Principal) -> InsertSpec:
     if sum(1 for i in _read_inserts() if i.owner_id == owner.id) >= MAX_ITEMS:
         raise TooMany(f"Höchstens {MAX_ITEMS} Einlagen je Nutzer. Bitte alte Einlagen löschen.")
-    spec = spec.model_copy(update={"id": new_id(), "owner_id": owner.id})
+    spec = spec.model_copy(update={"id": new_id(), "owner_id": owner.id,
+                                   "created_at": datetime.now(timezone.utc).isoformat()})
     save_insert(spec)
     return spec
+
+
+def insert_created(spec: InsertSpec) -> str:
+    """Anlagezeitpunkt (ISO); ältere Einlagen ohne Angabe: letzte Änderung der Datei."""
+    if spec.created_at:
+        return spec.created_at
+    f = insert_dir(spec.id) / "insert.json"
+    t = f.stat().st_mtime if f.exists() else 0.0
+    return datetime.fromtimestamp(t, timezone.utc).isoformat()
 
 
 def save_insert(spec: InsertSpec) -> None:

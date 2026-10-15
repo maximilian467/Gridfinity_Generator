@@ -92,6 +92,7 @@ class InsertSpec(BaseModel):
     id: str = Field("", max_length=40)
     name: str = Field("Einlage", max_length=120)
     owner_id: int | None = None           # setzt nur der Server (Angaben des Clients zählen nicht)
+    created_at: str = Field("", max_length=40)   # setzt nur der Server beim Anlegen
     grid_x: int | None = Field(None, ge=1, le=12)
     grid_y: int | None = Field(None, ge=1, le=12)
     height_u: int | None = Field(None, ge=1, le=30)

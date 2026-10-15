@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -57,9 +58,45 @@ def _body_spec(iid: str, spec: InsertSpec | None, user: Principal) -> InsertSpec
     return spec.model_copy(update={"id": iid, "owner_id": saved.owner_id}) if spec else saved
 
 
+STANDARD_RE = re.compile(r"spitz.*zange", re.I)
+
+
+def standard_height(user: Principal) -> tuple[float, str] | None:
+    """Standardhöhe neuer Einlagen: Gesamthöhe der zuletzt angelegten Einlage mit einer Spitzzange
+    (Name der Einlage oder eines ihrer Werkzeuge). So sind alle Einlagen gleich hoch."""
+    found = []
+    for ins in storage.list_inserts(user):
+        try:
+            objs = storage.objects_for(ins, user)
+        except KeyError:
+            continue
+        if any(STANDARD_RE.search(n) for n in [ins.name, *(o.name for o in objs.values())]):
+            found.append((storage.insert_created(ins), ins, objs))
+    for _, ins, objs in sorted(found, key=lambda t: t[0], reverse=True):
+        if ins.height_mm is not None:
+            return round(ins.height_mm, 1), ins.name
+        if not ins.placements or any(o.profile is None or not o.contour_mm for o in objs.values()):
+            continue
+        try:
+            return round(compute_layout(ins, objs).total_height, 1), ins.name
+        except Exception:  # noqa: BLE001 - kaputte Altdaten: nächste Einlage versuchen
+            continue
+    return None
+
+
+@router.get("/standard-height")
+def get_standard_height(user: Principal = Depends(current_user)) -> dict:
+    std = standard_height(user)
+    return {"height_mm": std[0] if std else None, "source": std[1] if std else None}
+
+
 @router.post("", response_model=InsertSpec)
 def create(spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertSpec:
     storage.check_placements(spec, user)
+    if spec.height_mm is None and spec.height_u is None and "height_mm" not in spec.model_fields_set:
+        std = standard_height(user)
+        if std:
+            spec = spec.model_copy(update={"height_mm": std[0]})
     return storage.create_insert(spec, user)
 
 
@@ -80,7 +117,7 @@ def get(iid: str, user: Principal = Depends(current_user)) -> InsertSpec:
 def put(iid: str, spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertSpec:
     old = get(iid, user)
     storage.check_placements(spec, user)
-    spec = spec.model_copy(update={"id": iid, "owner_id": old.owner_id})
+    spec = spec.model_copy(update={"id": iid, "owner_id": old.owner_id, "created_at": old.created_at})
     storage.save_insert(spec)
     return spec
 

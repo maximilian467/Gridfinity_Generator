@@ -60,7 +60,7 @@ def test_fixed_total_height_reduces_sink():
     lay2 = compute_layout(_spec(height_mm=22.0, sink=1.0), {"p": o})
     assert lay2.total_height == pytest.approx(22.0, abs=0.01)
     assert min(p.z0 for p in lay2.pieces) >= 4.75 + 1.5 - 1e-6
-    assert any("flacher" in w for w in lay2.warnings)
+    assert any("nötig" in w for w in lay2.warnings)
 
 
 def test_grid_does_not_grow_with_compartments():
@@ -105,3 +105,19 @@ def test_soft_grip_profile():
     assert not solid.isInside(cq.Vector(bx + ux * 6, by + uy * 6, g.z0 + 1))
     assert solid.isInside(cq.Vector(bx + ux * 2, by + uy * 2, zt - 2))
 
+
+
+def test_fixed_height_stays_fixed_with_deep_grip_and_compartment():
+    from app.schemas import GripRecess
+    o = synthetic_pliers()
+    lay0 = compute_layout(_spec(height_mm=30.0), {"p": o})
+    spec = _spec(height_mm=30.0, grip_recesses=[GripRecess(x=0, y=0, w=16, attach=0, s=60, depth_below=40)],
+                 compartments=[Compartment(x=5, y=5, w=20, l=20, depth=60)])
+    lay = compute_layout(spec, {"p": o})
+    assert lay.total_height == pytest.approx(30.0, abs=0.01)
+    # Werkzeug sinkt wie ohne Mulde ein, Mulde und Fach enden auf dem Mindestboden
+    assert lay.sink == pytest.approx(lay0.sink)
+    assert lay.grips[0].z0 == pytest.approx(4.75 + 1.5) and lay.comps[0].z0 == pytest.approx(4.75 + 1.5)
+    assert any("Greifmulden" in w and "nötig" in w for w in lay.warnings)
+    assert any("Fächer" in w and "nötig" in w for w in lay.warnings)
+    assert not any("Tiefster Boden" in w for w in lay.warnings)

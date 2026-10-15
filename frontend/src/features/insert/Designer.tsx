@@ -23,6 +23,17 @@ function bake(sp: InsertSpec, dx: number, dy: number): InsertSpec {
 }
 const round1 = (v: number) => Math.round(v * 10) / 10
 
+/** Ausgeblendete Hinweise je Einlage (Zahlen zählen nicht: ändert sich nur ein Wert, bleibt er weg). */
+const warnKey = (w: string) => w.replace(/\d+([.,]\d+)?/g, '#')
+function useDismissed(id: string): [string[], (w: string) => void, () => void] {
+  const k = `einlage-hinweise-${id}`
+  const [d, setD] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(k) ?? '[]') } catch { return [] }
+  })
+  const put = (v: string[]) => { setD(v); try { localStorage.setItem(k, JSON.stringify(v)) } catch { /* egal */ } }
+  return [d, (w) => put([...d, warnKey(w)]), () => put([])]
+}
+
 function useDebounced<T>(v: T, ms: number): T {
   const [d, setD] = useState(v)
   useEffect(() => { const t = setTimeout(() => setD(v), ms); return () => clearTimeout(t) }, [v, ms])
@@ -65,6 +76,9 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const patch = (p: Partial<InsertSpec>) => setSpec((s) => ({ ...s, ...p }))
 
   const objects = useQuery({ queryKey: ['objects'], queryFn: () => api.objects(true) })
+  const std = useQuery({ queryKey: ['standard-height'], queryFn: api.standardHeight, staleTime: 60_000 })
+  const stdH = std.data?.height_mm ?? null
+  const [dismissed, dismiss, undismiss] = useDismissed(initial.id)
   const objMap = useMemo(() => Object.fromEntries((objects.data ?? []).map((o) => [o.id, o])) as Record<string, ObjectSpec>, [objects.data])
 
   // Autosave
@@ -221,6 +235,8 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
   const lay = layout.data
   const warnings = lay?.warnings ?? []
+  const shownWarnings = warnings.filter((w) => !dismissed.includes(warnKey(w)))
+  const hiddenN = warnings.length - shownWarnings.length
 
   return (
     <div className="grid gap-0 lg:grid-cols-[300px_minmax(0,1fr)_320px] min-h-[calc(100dvh-56px)]">
@@ -239,10 +255,16 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             </div>
           )}
           <Check label="Höhe automatisch" checked={spec.height_u === null && spec.height_mm === null}
-            onChange={(v) => patch(v ? { height_u: null, height_mm: null } : { height_u: null, height_mm: Math.round(lay?.total_height ?? 32) })} />
+            onChange={(v) => patch(v ? { height_u: null, height_mm: null } : { height_u: null, height_mm: stdH ?? Math.round(lay?.total_height ?? 32) })} />
           {spec.height_mm !== null && (
             <NumberField label="Gesamthöhe" step={1} min={10} value={spec.height_mm} onChange={(v) => patch({ height_mm: v, height_u: null })}
               hint={spec.stacking_lip ? 'inkl. Stapelrand (3,8 mm), ohne Werkzeug' : 'ohne Werkzeug'} />
+          )}
+          {stdH !== null && (
+            <div className="hint mt-0 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>Standardhöhe <span className="num">{stdH.toFixed(1).replace('.', ',')} mm</span> (aus „{std.data?.source}“): alle Einlagen gleich hoch.</span>
+              {spec.height_mm !== stdH && <button className="btn btn-sm" onClick={() => patch({ height_mm: stdH, height_u: null })}>Standardhöhe verwenden</button>}
+            </div>
           )}
           {spec.height_u !== null && spec.height_mm === null && (
             <NumberField label="Höhe" unit="U (7 mm)" step={1} min={1} value={spec.height_u} onChange={(v) => patch({ height_u: Math.round(v) })} />
@@ -422,8 +444,9 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
                 <button className="btn btn-sm ml-2" onClick={growGrid}>Einlage um ein Rasterfeld vergrößern</button>
               </Msg>
             )}
-            {warnings.map((w, i) => (
-              <Msg key={i} kind="warn">{w}
+            {hiddenN > 0 && <button className="btn btn-sm justify-self-start" onClick={undismiss}>{hiddenN} ausgeblendete{hiddenN === 1 ? 'n Hinweis' : ' Hinweise'} wieder zeigen</button>}
+            {shownWarnings.map((w, i) => (
+              <Msg key={i} kind="warn" onClose={() => dismiss(w)}>{w}
                 {/Innenbereich|überlappen|Wand zwischen/.test(w) && spec.placements.length > 0 &&
                   <button className="btn btn-sm ml-2" onClick={doArrange}><Rows size={14} /> Automatisch anordnen</button>}
               </Msg>

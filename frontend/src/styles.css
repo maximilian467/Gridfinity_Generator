@@ -115,6 +115,9 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
 
 .msg { display: flex; gap: 8px; align-items: flex-start; background: var(--surface); }
 .msg-info { border-color: var(--line-2); color: var(--ink-2); }
+.msg-close { flex-shrink: 0; display: grid; place-items: center; width: 22px; height: 22px; margin: -2px -4px 0 0;
+  border-radius: 6px; color: inherit; opacity: 0.7; background: transparent; border: 0; cursor: pointer; }
+.msg-close:hover { opacity: 1; background: color-mix(in srgb, currentColor 12%, transparent); }
 
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 999px;
   font-size: 12px; font-weight: 500; border: 1px solid var(--line-2); color: var(--ink-2); background: var(--surface); white-space: nowrap; }

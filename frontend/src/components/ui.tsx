@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle, Info, WarningCircle, XCircle } from '@phosphor-icons/react'
+import { CheckCircle, Info, WarningCircle, X, XCircle } from '@phosphor-icons/react'
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
@@ -84,9 +84,14 @@ export function Stepper({ steps, current, onGo }: { steps: string[]; current: nu
 
 const MSG_ICON = { warn: WarningCircle, err: XCircle, ok: CheckCircle, info: Info }
 
-export function Msg({ kind = 'info', children }: { kind?: 'warn' | 'err' | 'ok' | 'info'; children: ReactNode }) {
+export function Msg({ kind = 'info', children, onClose }: { kind?: 'warn' | 'err' | 'ok' | 'info'; children: ReactNode; onClose?: () => void }) {
   const Icon = MSG_ICON[kind]
-  return <div className={`msg msg-${kind}`} role={kind === 'err' ? 'alert' : undefined}><Icon size={18} className="shrink-0 mt-px" /><div>{children}</div></div>
+  return (
+    <div className={`msg msg-${kind}`} role={kind === 'err' ? 'alert' : undefined}>
+      <Icon size={18} className="shrink-0 mt-px" /><div className="flex-1">{children}</div>
+      {onClose && <button className="msg-close" onClick={onClose} title="Hinweis ausblenden" aria-label="Hinweis ausblenden"><X size={14} /></button>}
+    </div>
+  )
 }
 
 export function Msgs({ items, kind = 'warn' }: { items?: string[]; kind?: 'warn' | 'err' | 'ok' | 'info' }) {

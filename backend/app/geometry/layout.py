@@ -338,8 +338,19 @@ def _min_floor(lay: Layout) -> float:
     return min(zs, default=1e9)
 
 
-def _min_tool_floor(lay: Layout) -> float:
-    return min([p.z0 for p in lay.pieces] + [g.z0 for g in lay.grips], default=1e9)
+def _clamp_to_height(lay: Layout, spec: InsertSpec, need: float) -> None:
+    """Feste Gesamthöhe: Greifmulden und Fächer mit fester Tiefe enden spätestens auf dem
+    Mindestboden (statt die Einlage höher zu machen) und melden das."""
+    for name, items in (("Greifmulden", lay.grips), ("Fächer", [c for c in lay.comps if not c.free_depth])):
+        deficit = 0.0
+        for it in items:
+            if it.z0 < need - 1e-6:
+                deficit = max(deficit, need - it.z0)
+                it.z0 = need
+        if deficit > 0:
+            lay.warnings.append(f"Bei {spec.height_mm:.0f} mm Gesamthöhe sind die {name} {deficit:.1f} mm "
+                                f"flacher als eingestellt. Für die volle Tiefe wären "
+                                f"{math.ceil(spec.height_mm + deficit)} mm Gesamthöhe nötig.")
 
 
 def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
@@ -364,15 +375,18 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
     # Höhe
     need = FOOT_H + spec.floor_min
     if spec.height_mm is not None:
-        # feste Gesamthöhe (inkl. Stapelrand): passt das Werkzeug nicht, sitzt es flacher
+        # feste Gesamthöhe (inkl. Stapelrand) bleibt fest: passt das Werkzeug nicht, sitzt es flacher;
+        # Greifmulden und Fächer werden flacher. Je Fall ein Hinweis mit der Höhe, die nötig wäre.
         u = max((spec.height_mm - (LIP_H if spec.stacking_lip else 0.0)) / UNIT_H, 1.0)
         lay = _assemble(spec, objects, gx, gy, u)
-        short = need - _min_tool_floor(lay)
+        short = need - min((p.z0 for p in lay.pieces), default=1e9)
         if short > 1e-6 and spec.placements:
             lay = _assemble(spec, objects, gx, gy, u, reduce=short)
             sink = min(lay.sink) if lay.sink else 0
-            lay.warnings.append(f"Für {spec.height_mm:.0f} mm Gesamthöhe sitzen die Werkzeuge flacher "
-                                f"(nur {sink * 100:.0f} % eingesunken).")
+            lay.warnings.append(f"Bei {spec.height_mm:.0f} mm Gesamthöhe sinken die Werkzeuge nur "
+                                f"{sink * 100:.0f} % statt {spec.sink * 100:.0f} % ein. Dafür wären "
+                                f"{math.ceil(spec.height_mm + short)} mm Gesamthöhe nötig.")
+        _clamp_to_height(lay, spec, need)
     elif spec.height_u is None:
         for u_ in range(1, 31):
             lay = _assemble(spec, objects, gx, gy, u_)
