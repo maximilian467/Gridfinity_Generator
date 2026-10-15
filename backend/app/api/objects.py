@@ -247,7 +247,7 @@ def run_segment(oid: str, view: str, body: SegmentBody, user: Principal = Depend
     ph = _photo(spec, view)
     rect = _rect_of(spec, view)
     ph["prompts"] = {"pos": body.pos, "neg": body.neg}
-    mask = segment.segment(rect, body.pos, body.neg, use_sam=body.use_sam)
+    mask = segment.segment(rect, body.pos, body.neg, use_sam=body.use_sam, holes=body.fill_holes)
     if mask.max() == 0:
         raise HTTPException(422, "Kein Werkzeug gefunden. Ecken prüfen oder mit 'Auswählen' auf das Werkzeug klicken.")
     hand_info: dict = {"hand_removed": False}
@@ -292,6 +292,8 @@ async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_ho
         raise HTTPException(422, "Maske nicht lesbar (PNG erwartet)") from None
     m = cv2.resize(m, (a4.RECT_W, a4.RECT_H), interpolation=cv2.INTER_NEAREST)
     mask = ((m > 127).astype(np.uint8)) * 255
+    if fill_holes:                       # gemalte/verschobene Kontur: keine Hohlräume im Werkzeug
+        mask = segment.fill_holes(mask) * 255
     rect = a4.rectify(bgr, np.asarray(ph["corners_px"], np.float32))
     return _save_mask(spec, view, rect, mask, fill_holes)
 

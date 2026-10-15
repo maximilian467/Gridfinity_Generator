@@ -234,6 +234,7 @@ def test_segment_fills_holes_and_keeps_tool_without_hand():
     img[f:h, e:g] = (30, 30, 160)
     img[f + 100:h - 100, e + 300:e + 500] = 235            # heller Fleck im Werkzeug (Spiegelung)
     m = segment(img, use_sam=False)
+    assert m[(f + h) // 2, e + 400] > 0                    # kein Hohlraum
     # liegt frei auf dem Blatt: Handentfernung fasst die Maske nicht an
     assert hands.remove_hand_auto(img, m, None) is None
 

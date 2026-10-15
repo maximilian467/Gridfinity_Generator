@@ -274,4 +274,6 @@ def segment(rect_bgr: np.ndarray, pos=(), neg=(), use_sam: bool = True, holes: b
     if out is None:
         out = cand
     out = largest_with(refine_edges(out, diff), pos)     # die Kante kommt pixelgenau aus dem Bild
+    if holes:
+        out = fill_holes(out)
     return out * 255

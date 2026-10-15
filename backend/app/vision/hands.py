@@ -183,7 +183,7 @@ def remove_hand_auto(rect: np.ndarray, mask: np.ndarray, top=None) -> HandResult
     von außen). Liegt das Werkzeug frei auf dem Blatt, bleibt die Maske unangetastet; sonst würden
     Teile, die in der Draufsicht nicht zu sehen sind (Räder, Griffseiten), als Hand entfernt.
     top: Funktion, die (Draufsicht entzerrt, Draufsicht-Maske) oder None liefert (Rückfallebene)."""
-    from .segment import touches_edge
+    from .segment import fill_holes, touches_edge
     if not touches_edge(mask):
         return None
     res = find_hand_sam(rect, mask)
@@ -191,4 +191,8 @@ def remove_hand_auto(rect: np.ndarray, mask: np.ndarray, top=None) -> HandResult
         t = top()
         if t is not None:
             res = remove_hand(rect, mask, *t)
+    if res is not None and res.applied:            # Hand-Reste im Werkzeug sind keine Hohlräume
+        tool = fill_holes(res.mask) & (mask > 0)
+        res = HandResult(tool.astype(np.uint8) * 255, ((mask > 0) & (tool == 0)).astype(np.uint8) * 255,
+                         res.removed_frac, True)
     return res
