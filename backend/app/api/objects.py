@@ -254,10 +254,14 @@ def run_segment(oid: str, view: str, body: SegmentBody, user: Principal = Depend
     hand = np.zeros_like(mask) if view == "side" else None
     ph.pop("cut_point_mm", None)
     top_mask_f = storage.object_dir(oid) / "top_mask.png"
-    if view == "side" and body.remove_hand and (segment.sam_available() or (top_mask_f.exists() and "top" in spec.photos)):
-        res = hands.find_hand_sam(rect, mask)            # Hand über den Blattrand finden (farbunabhängig)
-        if res is None and top_mask_f.exists() and "top" in spec.photos:   # Rückfallebene: Farbmodell
-            res = hands.remove_hand(rect, mask, _rect_of(spec, "top"), cv2.imread(str(top_mask_f), cv2.IMREAD_GRAYSCALE))
+
+    def top():   # Rückfallebene ohne SAM: Farbmodell aus der Draufsicht
+        if not (top_mask_f.exists() and "top" in spec.photos):
+            return None
+        return _rect_of(spec, "top"), cv2.imread(str(top_mask_f), cv2.IMREAD_GRAYSCALE)
+
+    if view == "side" and body.remove_hand:
+        res = hands.remove_hand_auto(rect, mask, top)
         if res is not None and res.applied:
             mask, hand = res.mask, res.hand
             # Berührungspunkt Hand/Werkzeug (Papier-mm) -> verdecktes Ende fürs Profil

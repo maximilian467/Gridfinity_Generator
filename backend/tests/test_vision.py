@@ -183,3 +183,73 @@ def test_largest_polygon_handles_nested_collections():
     m[100:150, 100:200] = 255
     m[150:200, 200:250] = 255          # berührt die erste Fläche nur an einer Ecke
     assert mask_to_polygon(m).area > 40
+
+
+# ---- automatische Erkennung (Papiermodell, Auswahl, Löcher) ----------------------------
+
+def _paper_scene():
+    from app.vision.a4 import RECT_H, RECT_W, mm_to_rect_px
+    img = np.full((RECT_H, RECT_W, 3), 60, np.uint8)                       # Tisch
+    x0, y0 = mm_to_rect_px([[0, 0]])[0].astype(int)
+    x1, y1 = mm_to_rect_px([[297, 210]])[0].astype(int)
+    img[y0:y1, x0:x1] = 235
+    return img, mm_to_rect_px
+
+
+def test_foreground_finds_light_gray_tool_but_not_soft_shadow():
+    from app.vision.segment import foreground
+    img, px = _paper_scene()
+    (a, b), (c, d) = px([[100, 90], [180, 110]]).astype(int)
+    img[b:d + 120, a + 40:c + 40] = 218                   # weicher Schatten daneben/darunter
+    img[b:d, a:c] = 198                                   # hellgrauer Griff (kaum dunkler als Papier)
+    fg = foreground(img)
+    assert fg[(b + d) // 2, (a + c) // 2]
+    assert not fg[d + 60, (a + c) // 2 + 40]              # Schatten zählt nicht
+    assert fg[b:d, a:c].mean() > 0.97
+
+
+def test_select_tool_ignores_hand_at_paper_edge_and_obeys_clicks():
+    from app.vision.segment import foreground, select_tool
+    img, px = _paper_scene()
+    (a, b), (c, d) = px([[0, 60], [90, 150]]).astype(int)
+    img[b:d, a:c] = (120, 150, 200)                       # "Hand" kommt über den linken Rand, groß
+    (e, f), (g, h) = px([[150, 100], [230, 115]]).astype(int)
+    img[f:h, e:g] = (30, 30, 30)                          # Werkzeug frei auf dem Blatt, kleiner
+    fg = foreground(img)
+    m = select_tool(fg)
+    assert m[(f + h) // 2, (e + g) // 2] and not m[(b + d) // 2, (a + c) // 2]
+    # Entfernen-Klick auf das Werkzeug: dann bleibt nur, was übrig ist (die Hand)
+    m2 = select_tool(fg, neg=[[(e + g) / 2, (f + h) / 2]])
+    assert not m2[(f + h) // 2, (e + g) // 2]
+    # Auswählen-Klick fügt eine weitere Fläche hinzu
+    m3 = select_tool(fg, pos=[[(a + c) / 2, (b + d) / 2]])
+    assert m3[(f + h) // 2, (e + g) // 2] and m3[(b + d) // 2, (a + c) // 2]
+
+
+def test_segment_fills_holes_and_keeps_tool_without_hand():
+    from app.vision import hands
+    from app.vision.segment import segment
+    img, px = _paper_scene()
+    (e, f), (g, h) = px([[100, 90], [200, 120]]).astype(int)
+    img[f:h, e:g] = (30, 30, 160)
+    img[f + 100:h - 100, e + 300:e + 500] = 235            # heller Fleck im Werkzeug (Spiegelung)
+    m = segment(img, use_sam=False)
+    # liegt frei auf dem Blatt: Handentfernung fasst die Maske nicht an
+    assert hands.remove_hand_auto(img, m, None) is None
+
+
+def test_sam_points_form_one_object(monkeypatch):
+    """Alle Klicks beschreiben EIN Objekt: Form (1, N, 2), sonst zählte nur der erste Punkt."""
+    from app.vision import segment as S
+    seen = {}
+
+    class Fake:
+        def __call__(self, img, **kw):
+            seen.update(kw)
+            class R:
+                masks = None
+            return [R()]
+    monkeypatch.setattr(S, "_get_sam", lambda: Fake())
+    S.sam_mask(np.zeros((10, 10, 3), np.uint8), [[1, 2], [3, 4]], [[5, 6]], box=[0, 0, 9, 9])
+    assert np.asarray(seen["points"]).shape == (1, 3, 2)
+    assert seen["labels"] == [[1, 1, 0]] and np.asarray(seen["bboxes"]).shape == (1, 4)

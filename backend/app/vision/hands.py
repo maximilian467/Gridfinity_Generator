@@ -62,8 +62,16 @@ def _prune_thin(m: np.ndarray) -> np.ndarray:
         return m
     core = (lab == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))).astype(np.uint8)
     g = r + int(PX_PER_MM)
-    near = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * g + 1, 2 * g + 1)))
+    near = cv2.distanceTransform((core == 0).astype(np.uint8), cv2.DIST_L2, 5) <= g   # schneller als große Dilatation
     return (m & near).astype(np.uint8)
+
+
+def _prune_near(tool: np.ndarray, hand: np.ndarray, mm: float = 15.0) -> np.ndarray:
+    """Dünne Säume nur nahe der Hand entfernen: dünne Werkzeugteile weiter weg (Zangenspitze,
+    Klinge) bleiben erhalten."""
+    pruned = _prune_thin(tool)
+    near = cv2.distanceTransform((hand == 0).astype(np.uint8), cv2.DIST_L2, 5) <= mm * PX_PER_MM
+    return np.where(near, pruned, tool).astype(np.uint8)
 
 
 def _paper(rect: np.ndarray) -> np.ndarray:
@@ -128,7 +136,7 @@ def find_hand_sam(rect: np.ndarray, mask: np.ndarray) -> HandResult | None:
     if n <= 1:
         return None
     tool = (lab == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))).astype(np.uint8)
-    tool = _prune_thin(tool)
+    tool = _prune_near(tool, hand)
     removed = ms & (tool == 0)
     frac = float(removed.sum()) / float(ms.sum())
     if frac > 0.9:            # SAM hat das Werkzeug erwischt -> nicht vertrauen
@@ -161,10 +169,26 @@ def remove_hand(side_rect: np.ndarray, side_mask: np.ndarray, top_rect: np.ndarr
     tool = (lab == keep).astype(np.uint8)
     tool = cv2.morphologyEx(tool, cv2.MORPH_CLOSE, _disk(1.5))
     tool &= ms.astype(np.uint8)
-    tool = _prune_thin(tool)
+    tool = _prune_near(tool, ms & (tool == 0))
 
     removed = ms & (tool == 0)
     frac = float(removed.sum()) / float(ms.sum())
     if frac < 0.03:                                          # nichts Nennenswertes entfernt
         return HandResult(side_mask, np.zeros_like(side_mask), 0.0, False)
     return HandResult(tool * 255, removed.astype(np.uint8) * 255, frac, True)
+
+
+def remove_hand_auto(rect: np.ndarray, mask: np.ndarray, top=None) -> HandResult | None:
+    """Hand nur suchen, wenn die Werkzeugmaske bis an den Blattrand reicht (die Hand kommt immer
+    von außen). Liegt das Werkzeug frei auf dem Blatt, bleibt die Maske unangetastet; sonst würden
+    Teile, die in der Draufsicht nicht zu sehen sind (Räder, Griffseiten), als Hand entfernt.
+    top: Funktion, die (Draufsicht entzerrt, Draufsicht-Maske) oder None liefert (Rückfallebene)."""
+    from .segment import touches_edge
+    if not touches_edge(mask):
+        return None
+    res = find_hand_sam(rect, mask)
+    if res is None and top is not None:
+        t = top()
+        if t is not None:
+            res = remove_hand(rect, mask, *t)
+    return res
