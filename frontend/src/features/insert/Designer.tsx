@@ -603,7 +603,7 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
           <NumberField label="Länge" value={Math.round((curLen ?? g.l) * 10) / 10} step={1} min={4} onChange={(v) => upd({ l: v, auto_length: false })}
             hint={g.auto_length !== false ? 'automatisch' : 'quer zum Werkzeug'} />
           <NumberField label="Tiefe unter Tasche" value={g.depth_below} step={1} min={0} onChange={(v) => upd({ depth_below: v })} />
-          <NumberField label="Kantenradius" value={g.edge_r ?? 4} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
+          <NumberField label="Kantenradius" value={g.edge_r ?? 1} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
         </div>
         <Check label="Länge automatisch (Breite der Tasche + Überstand)" checked={g.auto_length !== false} onChange={(v) => upd({ auto_length: v })} />
         <Check label="Weich ausgeformt (ovaler Boden, runde Kante)" checked={g.rounded !== false} onChange={(v) => upd({ rounded: v })} />
@@ -624,7 +624,7 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
         <NumberField label="Drehung" unit="°" value={g.rot_deg} step={5} onChange={(v) => upd({ rot_deg: v })} />
         <NumberField label="Tiefe unter Taschenboden" value={g.depth_below} step={1} min={0} onChange={(v) => upd({ depth_below: v })} />
         {g.shape !== 'rect' && <>
-          <NumberField label="Kantenradius" value={g.edge_r ?? 4} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
+          <NumberField label="Kantenradius" value={g.edge_r ?? 1} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
           <Check label="Weich ausgeformt (ovaler Boden, runde Kante)" checked={g.rounded !== false} onChange={(v) => upd({ rounded: v })} />
         </>}
         {del}

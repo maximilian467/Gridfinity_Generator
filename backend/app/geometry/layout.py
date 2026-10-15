@@ -32,7 +32,7 @@ class Grip:
     auto: bool = False
     placement: int | None = None
     params: GripRecess | None = None      # automatische Mulde als übernehmbare Spec (vor Zentrierung)
-    edge_r: float = 4.0                   # Rundung der Oberkante
+    edge_r: float = 1.0                   # Rundung der Oberkante
     z_top: float = 0.0                    # Oberfläche der Einlage
 
 
