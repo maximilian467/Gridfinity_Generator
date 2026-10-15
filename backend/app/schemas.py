@@ -99,7 +99,7 @@ class InsertSpec(BaseModel):
     sink: float = Field(0.65, ge=0.2, le=1.0)              # Werkzeug sinkt zu diesem Anteil seiner Dicke ein
     stacking_lip: bool = True
     magnets: bool = False
-    clearance_xy: float = Field(1.5, ge=0, le=10)
+    clearance_xy: float = Field(2.5, ge=0, le=10)
     clearance_end: float = Field(1.0, ge=0, le=20)
     clearance_z: float = Field(0.4, ge=0, le=10)
     overhang: float = Field(0.0, ge=-50, le=50)

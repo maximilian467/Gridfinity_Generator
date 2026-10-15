@@ -311,7 +311,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
           <Segmented value={[0.3, 1.0, 2.0].includes(spec.clearance_xy) ? spec.clearance_xy : -1}
             onChange={(v) => v > 0 && patch({ clearance_xy: v })}
             options={[{ value: 0.3, label: 'Presspassung' }, { value: 1.0, label: 'Normal' }, { value: 2.0, label: 'Locker' }, { value: -1, label: 'Frei' }]} />
-          <NumberField label="Spiel seitlich" value={spec.clearance_xy} step={0.1} min={0} max={4} onChange={(v) => patch({ clearance_xy: v })} hint="Standard 1,5 mm" />
+          <NumberField label="Spiel seitlich" value={spec.clearance_xy} step={0.1} min={0} max={4} onChange={(v) => patch({ clearance_xy: v })} hint="Standard 2,5 mm (Frei)" />
           <NumberField label="Zusatzspiel an den Enden" value={spec.clearance_end} step={0.1} min={0} onChange={(v) => patch({ clearance_end: v })} />
           <NumberField label="Abstand Boden zu Werkzeug" value={spec.clearance_z} step={0.1} min={0} onChange={(v) => patch({ clearance_z: v })} />
         </section>

@@ -96,7 +96,7 @@ export function ProfileStep({ o: obj, header, bar }: {
   const o = calc.data ?? shown ?? obj
   const newInsert = useMutation({
     mutationFn: () => {
-      const base = { clearance_xy: 1.5, clearance_end: 1.0, min_wall: 1.6, placements: [] } as unknown as import('../../lib/types').InsertSpec
+      const base = { clearance_xy: 2.5, clearance_end: 1.0, min_wall: 1.6, placements: [] } as unknown as import('../../lib/types').InsertSpec
       return api.createInsert({ name: `Einlage ${o.name}`, placements: [placeNew(base, {}, o)] })
     },
     onSuccess: (i) => nav(`/insert/${i.id}`),

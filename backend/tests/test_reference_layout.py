@@ -95,7 +95,7 @@ def test_center_off_keeps_positions():
                       placements=[Placement(object_id="pliers", x=10, y=40)])
     lay = compute_layout(spec, {"pliers": o})
     assert lay.shift == (0.0, 0.0)
-    assert lay.pocket_union().bounds[0] == pytest.approx(10 - 2.5, abs=0.3)
+    assert lay.pocket_union().bounds[0] == pytest.approx(10 - spec.clearance_xy - spec.clearance_end, abs=0.3)
 
 
 def test_attached_grip_slides_along_axis_and_stays_centered():
