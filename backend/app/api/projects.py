@@ -30,8 +30,17 @@ def _get(pid: str, user: Principal) -> ProjectSpec:
         raise HTTPException(404, "Projekt nicht gefunden") from None
 
 
+def _migrate(ins: InsertSpec) -> InsertSpec:
+    """Altdaten vor ffb65dc: auto_grip stand in overrides bzw. wurde neben vorhandenen Mulden eingeschaltet."""
+    if "auto_grip" in ins.overrides or (ins.auto_grip and ins.grip_recesses):
+        ins = ins.model_copy(update={"overrides": [f for f in ins.overrides if f != "auto_grip"],
+                                     "auto_grip": ins.auto_grip and not ins.grip_recesses})
+        storage.save_insert(ins)
+    return ins
+
+
 def project_inserts(p: ProjectSpec) -> list[InsertSpec]:
-    return [i for i in storage._read_inserts() if i.project_id == p.id]
+    return [_migrate(i) for i in storage._read_inserts() if i.project_id == p.id]
 
 
 def apply_template(p: ProjectSpec, ins: InsertSpec) -> InsertSpec:

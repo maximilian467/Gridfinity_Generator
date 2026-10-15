@@ -329,7 +329,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <span className="label mb-0">Werkzeug sinkt ein <span className="num">{Math.round(spec.sink * 100)} %</span>
               {lay && lay.sink.length > 0 && Math.min(...lay.sink) < spec.sink - 0.01 && <span className="num" style={{ color: 'var(--warn)' }}> (bei dieser Höhe {Math.round(Math.min(...lay.sink) * 100)} %)</span>}
             </span>
-            <input type="range" min={30} max={100} step={5} value={Math.round(spec.sink * 100)} onChange={(e) => patch({ sink: +e.target.value / 100 })} />
+            <input type="range" min={30} max={100} step={5} value={Math.round(((pending?.p.sink as number | undefined) ?? spec.sink) * 100)} onChange={(e) => patch({ sink: +e.target.value / 100 })} />
             <span className="hint mt-0">Anteil der Werkzeugdicke, der in der Tasche verschwindet. 50 bis 75 % lässt sich gut greifen, 100 % = bündig.</span>
           </label>
           <Check label="Stapelrand" checked={spec.stacking_lip} onChange={(v) => patch({ stacking_lip: v })} />

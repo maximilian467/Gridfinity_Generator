@@ -73,10 +73,11 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
 
       {data && !data.heights_equal && data.inserts.some((i) => i.placed) && (() => {
         const h = Math.ceil(Math.max(...data.inserts.filter((i) => i.total_height).map((i) => i.total_height!)))
+        const own = data.inserts.filter((i) => i.overrides.includes('height_mm')).map((i) => i.name)
         return (
           <Msg kind="warn">Die Einlagen sind unterschiedlich hoch.
-            <button className="btn btn-sm ml-2" onClick={() => patch({ template: { ...p.template, height_mm: h } })}>Alle auf {h} mm angleichen</button>
-            <span className="hint"> (Vorlage: feste Gesamthöhe; eigene Höhen einzelner Einlagen bleiben)</span>
+            {p.template.height_mm !== h && <button className="btn btn-sm ml-2" onClick={() => patch({ template: { ...p.template, height_mm: h } })}>Alle auf {h} mm angleichen</button>}
+            {own.length > 0 && <span> Eigene Höhe (im Designer auf „Projektwert“ zurücksetzen): {own.join(', ')}.</span>}
           </Msg>
         )
       })()}
@@ -143,6 +144,7 @@ function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData
     onSuccess: (r) => {
       const parts = [`${r.created.length} Einlage(n) nach der Vorlage erzeugt.`]
       if (r.skipped.length) parts.push(`Noch nicht fertig gescannt: ${r.skipped.join(', ')}.`)
+      if (!r.created.length && r.already?.length) parts.push('Alle Werkzeuge haben schon eine Einlage.')
       if (r.unfinished_names?.length) parts.push(`Nicht angeordnet (unfertig): ${r.unfinished_names.join(', ')}.`)
       if (r.left_out_names?.length) parts.push(`Passt nicht hinein: ${r.left_out_names.join(', ')}.`)
       setMsg({ kind: r.left_out_names?.length || r.skipped.length ? 'warn' : 'ok', text: parts.join(' ') })
@@ -266,7 +268,16 @@ function DrawerView({ p, data, sel, onSelect, onDrop }: {
     if (!ins || !ins.gx || !m) return
     e.preventDefault()
     const ix = Math.round((m.x - P.origin[0]) / PITCH - ins.gx / 2), iy = Math.round((m.y - P.origin[1]) / PITCH - ins.gy! / 2)
-    onDrop(id, { ix: Math.max(0, ix), iy: Math.max(0, iy), rot: 0 })
+    // passt sie nur gedreht, gedreht einsetzen
+    const occ = occupied(data, id)
+    const act = new Set(P.active.map(([a, b]) => `${a},${b}`))
+    const free = (x: number, y: number, w: number, h: number) => {
+      for (let a = x; a < x + w; a++) for (let b = y; b < y + h; b++) if (!act.has(`${a},${b}`) || occ.has(`${a},${b}`)) return false
+      return true
+    }
+    const x = Math.max(0, ix), y = Math.max(0, iy)
+    const rot: 0 | 90 = free(x, y, ins.gx, ins.gy!) || !free(x, y, ins.gy!, ins.gx) ? 0 : 90
+    onDrop(id, { ix: x, iy: y, rot })
   }
   return (
     <div ref={wrap} onDragOver={(e) => { if (e.dataTransfer.types.includes('text/insert')) e.preventDefault() }} onDrop={onDropNew}>

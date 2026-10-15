@@ -64,7 +64,10 @@ function Plate({ data }: { data: CloneData }) {
     }
     return new THREE.ExtrudeGeometry(shapes, { depth: P.plate_h, bevelEnabled: false, curveSegments: 4 })
   }, [data])
-  return <mesh geometry={geo} material={mat('#8f959c')} />
+  const m = useMemo(() => mat('#8f959c'), [])
+  useEffect(() => () => geo.dispose(), [geo])
+  useEffect(() => () => m.dispose(), [m])
+  return <mesh geometry={geo} material={m} />
 }
 
 /** Eine Einlage in eigenen Koordinaten (0..außen), oben offen mit Taschen, Mulden und Fächern */
@@ -152,6 +155,7 @@ function Tool({ t, quality }: { t: CloneTool; quality: 'low' | 'high' }) {
   const material = useMemo(() => tex
     ? [new THREE.MeshStandardMaterial({ map: tex.map, roughness: 0.6, alphaTest: 0.5 }), mat(tex.info.color ?? '#c9ccd1', { roughness: 0.6 })]
     : mat('#c9ccd1', { roughness: 0.5, metalness: 0.3 }), [tex])
+  useEffect(() => () => (Array.isArray(material) ? material : [material]).forEach((q) => q.dispose()), [material])
   return (
     <group position={[t.x, t.y, 0]} rotation={[0, 0, (t.rot_deg * Math.PI) / 180]}>
       <mesh geometry={geo} material={material} />
