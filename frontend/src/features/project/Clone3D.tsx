@@ -103,6 +103,7 @@ function InsertBody({ ins }: { ins: CloneInsert }) {
     L.compartments.forEach((q) => floor(q.polygons, q.z0, c.compartment))
     return out
   }, [ins])
+  useEffect(() => () => parts.forEach((q) => { q.geo.dispose(); (Array.isArray(q.mat) ? q.mat : [q.mat]).forEach((m) => m !== invisible && m.dispose()) }), [parts])
   return <>{parts.map((p, i) => <mesh key={i} geometry={p.geo} material={p.mat} position={[0, 0, p.z]} />)}</>
 }
 
@@ -145,6 +146,8 @@ function Tool({ t, quality }: { t: CloneTool; quality: 'low' | 'high' }) {
     g.computeVertexNormals()
     return g
   }, [t, quality, tex])
+  useEffect(() => () => geo.dispose(), [geo])
+  useEffect(() => () => tex?.map.dispose(), [tex])
   // Oberseite/Unterseite mit Foto, Seitenwände in der mittleren Farbe des Werkzeugs
   const material = useMemo(() => tex
     ? [new THREE.MeshStandardMaterial({ map: tex.map, roughness: 0.6, alphaTest: 0.5 }), mat(tex.info.color ?? '#c9ccd1', { roughness: 0.6 })]

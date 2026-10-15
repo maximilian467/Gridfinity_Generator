@@ -91,3 +91,28 @@ def test_insert_created_in_project_uses_template():
     i = client.post("/api/inserts", json={"name": "X", "project_id": p["id"],
                                          "placements": [{"object_id": demos[0]["id"]}]}).json()
     assert i["sink"] == 0.8 and i["color_hex"]["pocket"] == "#cc0000"
+
+
+def test_template_change_keeps_single_grip_and_generate_is_idempotent():
+    p, demos = _project()
+    pid = p["id"]
+    r = client.post(f"/api/projects/{pid}/generate", json={}).json()
+    again = client.post(f"/api/projects/{pid}/generate", json={"object_ids": [demos[0]["id"]]}).json()
+    assert again["created"] == [] and again["already"]
+    proj = client.get(f"/api/projects/{pid}").json()
+    proj["template"]["grip_width"] = 24.0
+    client.put(f"/api/projects/{pid}", json=proj)
+    ins = client.get(f"/api/inserts/{r['created'][0]}").json()
+    assert ins["auto_grip"] is False and len(ins["grip_recesses"]) == 1
+    lay = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
+    assert len(lay["grips"]) == 1
+
+
+def test_place_unfinished_insert_gives_422():
+    p, _ = _project()
+    raw = client.post("/api/objects", json={"name": "unfertig"}).json()
+    i = client.post("/api/inserts", json={"name": "U", "project_id": p["id"], "placements": [{"object_id": raw["id"]}]}).json()
+    r = client.post(f"/api/projects/{p['id']}/place", json={"insert_id": i["id"], "placement": {"insert_id": i["id"], "ix": 0, "iy": 0, "rot": 0}})
+    assert r.status_code == 422
+    a = client.post(f"/api/projects/{p['id']}/arrange", json={"mode": "all"}).json()
+    assert i["id"] in a["unfinished"]

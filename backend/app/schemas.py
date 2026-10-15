@@ -157,7 +157,7 @@ class BaseplateSpec(BaseModel):
 
 # Felder einer Einlage, die die Projektvorlage vorgibt (Liste hier erweitern/kürzen genügt)
 TEMPLATE_FIELDS = ("height_mm", "sink", "stacking_lip", "magnets", "clearance_xy", "clearance_end", "clearance_z",
-                   "floor_min", "min_wall", "smooth_mm", "auto_grip", "grip_width", "grip_overhang",
+                   "floor_min", "min_wall", "smooth_mm", "grip_width", "grip_overhang",
                    "grip_depth_below", "comp_min_size", "comp_wall", "comp_depth", "comp_follow", "color_hex",
                    "color_skin")
 
@@ -174,7 +174,7 @@ class InsertTemplate(BaseModel):
     floor_min: float = Field(1.5, ge=0.4, le=20)
     min_wall: float = Field(1.6, ge=0.4, le=20)
     smooth_mm: float = Field(3.0, ge=0, le=10)
-    auto_grip: bool = True
+    auto_grip: bool = True            # nur beim Anlegen: Greifmulde setzen (wird nicht vererbt)
     grip_width: float = Field(20.0, ge=4, le=80)
     grip_overhang: float = Field(15.0, ge=0, le=100)
     grip_depth_below: float = Field(8.0, ge=0, le=100)

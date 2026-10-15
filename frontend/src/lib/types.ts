@@ -131,15 +131,15 @@ export interface PartColors { body: string; pocket: string; grip: string; compar
 
 /** Felder, die die Projektvorlage vorgibt (Spiegel: backend schemas.TEMPLATE_FIELDS) */
 export const TEMPLATE_FIELDS = ['height_mm', 'sink', 'stacking_lip', 'magnets', 'clearance_xy', 'clearance_end', 'clearance_z',
-  'floor_min', 'min_wall', 'smooth_mm', 'auto_grip', 'grip_width', 'grip_overhang', 'grip_depth_below', 'comp_min_size',
+  'floor_min', 'min_wall', 'smooth_mm', 'grip_width', 'grip_overhang', 'grip_depth_below', 'comp_min_size',
   'comp_wall', 'comp_depth', 'comp_follow', 'color_hex', 'color_skin'] as const
 export type TemplateField = typeof TEMPLATE_FIELDS[number]
-export type InsertTemplate = Pick<InsertSpec, TemplateField>
+export type InsertTemplate = Pick<InsertSpec, TemplateField> & { auto_grip: boolean }
 
 export const FIELD_LABELS: Record<TemplateField, string> = {
   height_mm: 'Gesamthöhe', sink: 'Einsinktiefe', stacking_lip: 'Stapelrand', magnets: 'Magnetlöcher',
   clearance_xy: 'Spiel seitlich', clearance_end: 'Zusatzspiel an den Enden', clearance_z: 'Abstand Boden zu Werkzeug',
-  floor_min: 'Min. Material unter Boden', min_wall: 'Min. Wand', smooth_mm: 'Kontur glätten', auto_grip: 'Greifmulde automatisch',
+  floor_min: 'Min. Material unter Boden', min_wall: 'Min. Wand', smooth_mm: 'Kontur glätten',
   grip_width: 'Greifmulde Breite', grip_overhang: 'Greifmulde Überstand', grip_depth_below: 'Greifmulde Tiefe',
   comp_min_size: 'Kasten Mindestgröße', comp_wall: 'Kasten Wandstärke', comp_depth: 'Kasten Tiefe', comp_follow: 'Kastenwand folgt Kontur',
   color_hex: 'Farben', color_skin: 'Farbhaut',

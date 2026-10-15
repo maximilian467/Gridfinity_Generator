@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
 import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, MagicWand, Plus, Rows, Scan, SignOut, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
-import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec } from '../../lib/types'
+import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec, TemplateField } from '../../lib/types'
+import { FIELD_LABELS } from '../../lib/types'
 import { BusyBar, Check, Empty, Msg, NumberField, Segmented, Silhouette, errText } from '../../components/ui'
 import { PartColorsEdit } from '../../components/ColorPick'
 import { PlateBuild, PlateSettings, toggleCells, usePlatePlan } from '../baseplate/Baseplate'
@@ -70,6 +71,15 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
       {clone.isError && <Msg kind="err">{errText(clone.error)}</Msg>}
       {data?.warnings.map((w) => <Msg key={w} kind="warn">{w}</Msg>)}
 
+      {data && !data.heights_equal && data.inserts.some((i) => i.placed) && (() => {
+        const h = Math.ceil(Math.max(...data.inserts.filter((i) => i.total_height).map((i) => i.total_height!)))
+        return (
+          <Msg kind="warn">Die Einlagen sind unterschiedlich hoch.
+            <button className="btn btn-sm ml-2" onClick={() => patch({ template: { ...p.template, height_mm: h } })}>Alle auf {h} mm angleichen</button>
+            <span className="hint"> (Vorlage: feste Gesamthöhe; eigene Höhen einzelner Einlagen bleiben)</span>
+          </Msg>
+        )
+      })()}
       {tab === 'drawer' && <DrawerTab p={p} data={data} busy={clone.isFetching} refresh={refreshClone} />}
       {tab === 'tools' && <ToolsTab p={p} data={data} refresh={refreshClone} />}
       {tab === 'template' && <TemplateTab p={p} setTemplate={(t) => patch({ template: t })} />}
@@ -122,9 +132,9 @@ function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData
   const arrange = useMutation({
     mutationFn: (mode: 'all' | 'missing') => api.arrange(p.id, mode),
     onSuccess: (r) => {
-      setMsg(r.left_out.length
-        ? { kind: 'warn', text: `Passt nicht mehr hinein: ${r.left_out_names.join(', ')}. Diese Einlagen liegen links bei "Nicht in der Schublade" und lassen sich gegen andere tauschen.` }
-        : { kind: 'ok', text: 'Alle Einlagen angeordnet.' })
+      const t = [r.left_out.length ? `Passt nicht mehr hinein: ${r.left_out_names.join(', ')}. Diese Einlagen liegen bei "Nicht in der Schublade"; zum Tauschen eine andere herausnehmen und die gewünschte aufs Raster ziehen.` : 'Alle Einlagen angeordnet.']
+      if (r.unfinished_names?.length) t.push(`Nicht angeordnet, weil das Werkzeug noch nicht fertig gescannt ist: ${r.unfinished_names.join(', ')}.`)
+      setMsg({ kind: r.left_out.length || r.unfinished_names?.length ? 'warn' : 'ok', text: t.join(' ') })
       refresh()
     },
   })
@@ -133,6 +143,7 @@ function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData
     onSuccess: (r) => {
       const parts = [`${r.created.length} Einlage(n) nach der Vorlage erzeugt.`]
       if (r.skipped.length) parts.push(`Noch nicht fertig gescannt: ${r.skipped.join(', ')}.`)
+      if (r.unfinished_names?.length) parts.push(`Nicht angeordnet (unfertig): ${r.unfinished_names.join(', ')}.`)
       if (r.left_out_names?.length) parts.push(`Passt nicht hinein: ${r.left_out_names.join(', ')}.`)
       setMsg({ kind: r.left_out_names?.length || r.skipped.length ? 'warn' : 'ok', text: parts.join(' ') })
       refresh()
@@ -170,7 +181,9 @@ function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData
           <h3 className="sect">Nicht in der Schublade ({out.length})</h3>
           {!out.length && <div className="hint mt-0">Alle Einlagen liegen in der Schublade.</div>}
           {out.map((i) => (
-            <div key={i.id} className="flex items-center gap-2 text-sm">
+            <div key={i.id} className="flex items-center gap-2 text-sm" draggable={!i.error}
+              onDragStart={(e) => { e.dataTransfer.setData('text/insert', i.id); e.dataTransfer.effectAllowed = 'move' }}
+              style={{ cursor: i.error ? 'default' : 'grab' }} title={i.error ? i.error : 'Aufs Raster ziehen oder "Einsetzen"'}>
               <span className="flex-1 truncate">{i.name}{i.gx ? <span className="num" style={{ color: 'var(--ink-2)' }}> · {i.gx}x{i.gy}</span> : null}</span>
               {i.error ? <span className="chip chip-warn text-xs" title={i.error}>unfertig</span> : (
                 <button className="btn btn-sm" disabled={!data} onClick={() => {
@@ -202,7 +215,7 @@ function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData
               <DrawerView p={p} data={data} sel={sel} onSelect={setSel}
                 onDrop={(id, pl) => place.mutate({ id, pl })} />
             </div>
-            <div className="hint mt-0">Einlage anklicken zum Auswählen, ziehen zum Verschieben (rastet auf 42-mm-Zellen ein). Belegte oder abgewählte Zellen lehnt die Schublade ab.</div>
+            <div className="hint mt-0">Einlage anklicken zum Auswählen, ziehen zum Verschieben (rastet auf 42-mm-Zellen ein). Einlagen von links ("Nicht in der Schublade") lassen sich direkt aufs Raster ziehen. Belegte oder abgewählte Zellen lehnt die Schublade ab.</div>
           </>
         ) : (
           <Suspense fallback={<div className="skeleton" style={{ height: 560 }} />}><Clone3D data={data} /></Suspense>
@@ -235,7 +248,7 @@ function DrawerView({ p, data, sel, onSelect, onDrop }: {
           const ins = data.inserts.find((i) => i.id === d.id)
           if (ins?.placed) {
             const ix = Math.round((d.x - d.dx - P.origin[0]) / PITCH), iy = Math.round((d.y - d.dy - P.origin[1]) / PITCH)
-            if (ix !== ins.placed.ix || iy !== ins.placed.iy) onDrop(d.id, { ix, iy, rot: ins.placed.rot })
+            if (ix !== ins.placed.ix || iy !== ins.placed.iy) onDrop(d.id, { ix: Math.max(0, ix), iy: Math.max(0, iy), rot: ins.placed.rot })
           }
         }
         return null
@@ -245,8 +258,18 @@ function DrawerView({ p, data, sel, onSelect, onDrop }: {
     return () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up) }
   }, [drag?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Einlage aus der Liste "Nicht in der Schublade" aufs Raster ziehen: die Mitte landet unter dem Zeiger
+  const onDropNew = (e: React.DragEvent) => {
+    const id = e.dataTransfer.getData('text/insert')
+    const ins = data.inserts.find((i) => i.id === id)
+    const m = toMm(e)
+    if (!ins || !ins.gx || !m) return
+    e.preventDefault()
+    const ix = Math.round((m.x - P.origin[0]) / PITCH - ins.gx / 2), iy = Math.round((m.y - P.origin[1]) / PITCH - ins.gy! / 2)
+    onDrop(id, { ix: Math.max(0, ix), iy: Math.max(0, iy), rot: 0 })
+  }
   return (
-    <div ref={wrap}>
+    <div ref={wrap} onDragOver={(e) => { if (e.dataTransfer.types.includes('text/insert')) e.preventDefault() }} onDrop={onDropNew}>
       <PlateEditor drawer={[p.drawer.drawer_x, p.drawer.drawer_y]} plan={P} disabled={p.drawer.disabled ?? []} editable={false} height="min(68vh, 640px)">
         {data.inserts.filter((i) => i.placed && i.gx).map((i) => {
           const [w, h] = i.placed!.rot === 0 ? [i.gx!, i.gy!] : [i.gy!, i.gx!]
@@ -285,6 +308,8 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
   const otherIns = (inserts.data ?? []).filter((i) => i.project_id !== p.id)
   const withInsert = new Set((inserts.data ?? []).filter((i) => i.project_id === p.id).flatMap((i) => i.placements.map((q) => q.object_id)))
   const done = () => { refresh(); objects.refetch(); inserts.refetch() }
+  const insOf = (oid: string) => (data?.inserts ?? []).filter((i) => i.tools?.some((t) => t.object_id === oid)
+    || (inserts.data ?? []).some((q) => q.id === i.id && q.placements.some((pl) => pl.object_id === oid)))
   const scan = useMutation({
     mutationFn: async () => { const o = await api.createObject('Neues Werkzeug'); await api.assign(p.id, 'object', o.id); return o },
     onSuccess: (o) => nav(`/scan/${o.id}`),
@@ -312,6 +337,12 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
                 <Silhouette contour={o.contour_mm} className="w-full h-24" />
                 <div className="font-medium truncate">{o.name}</div>
                 <div className="num text-xs" style={{ color: 'var(--ink-2)' }}>{o.profile ? `${o.length_mm.toFixed(0)} x ${o.width_mm.toFixed(0)} mm` : 'noch nicht fertig gescannt'}</div>
+                {insOf(o.id).map((i) => (
+                  <button key={i.id} className={`chip text-xs cursor-pointer w-fit ${i.placed ? 'chip-ok' : ''}`} onClick={() => nav(`/insert/${i.id}`)}
+                    title={i.placed ? 'Einlage liegt in der Schublade' : 'Einlage liegt noch nicht in der Schublade'}>
+                    <Cube size={12} /> {i.gx ? `${i.gx}x${i.gy}, ${i.total_height?.toFixed(0)} mm` : 'Einlage'}{i.placed ? '' : ' · draußen'}
+                  </button>
+                ))}
                 <div className="flex gap-1 flex-wrap">
                   <button className="btn btn-sm" onClick={() => nav(`/scan/${o.id}`)}>Scan</button>
                   {o.profile && !withInsert.has(o.id) && <button className="btn btn-sm" onClick={() => gen.mutate(o.id)} disabled={gen.isPending}><Plus size={14} /> Einlage</button>}
@@ -340,7 +371,7 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
               <span className="swatch" style={{ background: i.colors.pocket, border: `3px solid ${i.colors.body}` }} />
               <button className="font-medium text-left flex-1 truncate bg-transparent border-0 cursor-pointer p-0" style={{ color: 'var(--ink)', font: 'inherit', fontWeight: 500 }}
                 onClick={() => nav(`/insert/${i.id}`)}>{i.name}</button>
-              {i.overrides.filter((f) => f !== 'auto_grip').length > 0 && <span className="chip chip-warn text-xs" title={i.overrides.join(', ')}>{i.overrides.filter((f) => f !== 'auto_grip').length} eigene Einstellung(en)</span>}
+              {i.overrides.length > 0 && <span className="chip chip-warn text-xs" title={i.overrides.map((f) => FIELD_LABELS[f as TemplateField] ?? f).join(', ')}>{i.overrides.length} eigene Einstellung(en)</span>}
               <span className="num text-xs" style={{ color: 'var(--ink-2)' }}>{i.gx ? `${i.gx} x ${i.gy} · ${i.total_height?.toFixed(1)} mm` : i.error}</span>
               <span className={`chip text-xs ${i.placed ? 'chip-ok' : ''}`}>{i.placed ? 'in der Schublade' : 'draußen'}</span>
               <button className="btn btn-sm btn-quiet" title="Aus dem Projekt nehmen" onClick={() => assign.mutate({ kind: 'insert', id: i.id, member: false })}><SignOut size={14} /></button>
@@ -360,7 +391,7 @@ function TemplateTab({ p, setTemplate }: { p: ProjectSpec; setTemplate: (t: Inse
       <section className="panel p-4 grid gap-3 content-start">
         <h2 className="sect">Größe</h2>
         <div className="hint mt-0">Gilt für alle Einlagen des Projekts. Einlagen, in denen du einen Wert bewusst überschrieben hast, behalten ihren Wert.</div>
-        <Check label="Höhe automatisch (je Einlage)" checked={t.height_mm === null} onChange={(v) => up({ height_mm: v ? null : 32 })} />
+        <Check label="Höhe automatisch (je Einlage, dann evtl. unterschiedlich hoch)" checked={t.height_mm === null} onChange={(v) => up({ height_mm: v ? null : 32 })} />
         {t.height_mm !== null && <NumberField label="Gesamthöhe aller Einlagen" value={t.height_mm} step={1} min={10} onChange={(v) => up({ height_mm: v })} hint="gleiche Höhe für alle, inkl. Stapelrand" />}
         <label className="grid gap-1">
           <span className="label mb-0">Werkzeug sinkt ein <span className="num">{Math.round(t.sink * 100)} %</span></span>

@@ -117,9 +117,12 @@ def plan_plate(spec: BaseplateSpec) -> PlatePlan:
         for ty, sy in enumerate(plan.row_sizes):
             cells = sorted((i, j) for i in range(i0, i0 + sx) for j in range(j0, j0 + sy) if (i, j) in active)
             if cells:
-                n += 1
                 poly = unary_union([plan.footprint(i, j) for i, j in cells])
-                plan.tiles.append(Tile(n, tx, ty, cells, poly))
+                parts = [poly] if isinstance(poly, Polygon) else list(poly.geoms)
+                for part in parts:            # zerfällt die Kachel (abgewählte Zellen), wird jedes Stück eine Kachel
+                    own = [c for c in cells if part.buffer(-1).intersects(plan.footprint(*c).buffer(-1))]
+                    n += 1
+                    plan.tiles.append(Tile(n, tx, ty, own, part))
             j0 += sy
         i0 += sx
     return plan

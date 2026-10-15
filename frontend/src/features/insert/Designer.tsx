@@ -24,6 +24,13 @@ function bake(sp: InsertSpec, dx: number, dy: number): InsertSpec {
   }
 }
 const round1 = (v: number) => Math.round(v * 10) / 10
+/** Wert für die Rückfrage lesbar machen */
+function fmt(f: string, v: unknown): string {
+  if (v === null || v === undefined) return 'automatisch'
+  if (typeof v === 'boolean') return v ? 'an' : 'aus'
+  if (typeof v === 'number') return f === 'sink' ? `${Math.round(v * 100)} %` : `${Math.round(v * 10) / 10} mm`
+  return 'geändert'
+}
 const DEFAULT_COLORS: PartColors = { body: '#3b3f45', pocket: '#f26b1d', grip: '#f26b1d', compartment: '#3b3f45' }
 
 /** Ausgeblendete Hinweise je Einlage (Zahlen zählen nicht: ändert sich nur ein Wert, bleibt er weg). */
@@ -271,7 +278,9 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   return (
     <div className="grid gap-0 lg:grid-cols-[300px_minmax(0,1fr)_320px] min-h-[calc(100dvh-56px)]">
       {/* Parameter */}
-      <aside className="panel p-3 grid gap-3 content-start overflow-y-auto overflow-x-hidden" style={{ borderRadius: 0, borderWidth: '0 1px 0 0', maxHeight: 'calc(100dvh - 56px)' }}>
+      <aside className="panel p-3 grid gap-3 content-start overflow-y-auto overflow-x-hidden" aria-busy={!!spec.project_id && proj.isPending}
+        style={{ borderRadius: 0, borderWidth: '0 1px 0 0', maxHeight: 'calc(100dvh - 56px)',
+          ...(spec.project_id && proj.isPending ? { pointerEvents: 'none', opacity: 0.55 } : {}) }}>
         <Field label="Name"><input className="input" value={spec.name} onChange={(e) => patch({ name: e.target.value })} /></Field>
         <section className="grid gap-2">
           {proj.data && (
@@ -519,7 +528,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
       {pending && (
         <div key={shake} className="override-bubble shake" role="alertdialog" aria-live="assertive">
           <div className="text-sm"><b>Projekteinstellung überschreiben?</b><br />
-            Das würde {pending.fields.map((f) => `„${FIELD_LABELS[f]}“`).join(', ')} aus dem Projekt „{proj.data?.name}“ für diese Einlage überschreiben.
+            Das würde {pending.fields.map((f) => `„${FIELD_LABELS[f]}“ (Projekt: ${fmt(f, (proj.data?.template as Record<string, unknown>)?.[f])}, neu: ${fmt(f, (pending.p as Record<string, unknown>)[f])})`).join(', ')} aus dem Projekt „{proj.data?.name}“ für diese Einlage überschreiben.
             Spätere Änderungen an der Vorlage gelten dann hier nicht mehr für {pending.fields.length > 1 ? 'diese Werte' : 'diesen Wert'}.</div>
           <div className="flex gap-2 justify-end">
             <button className="btn btn-sm" onClick={() => setPending(null)}>Abbrechen</button>

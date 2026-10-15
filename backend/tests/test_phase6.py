@@ -72,3 +72,9 @@ def test_baseplate_api_job():
     assert c.get(r["outputs"]["plan"]).text.startswith("<svg")
     assert c.get(r["outputs"]["zip"]).status_code == 200
     assert c.post("/api/baseplates/build", json={"drawer_x": 30, "drawer_y": 200}).status_code == 422
+
+
+def test_tile_split_by_disabled_cells_becomes_separate_tiles():
+    # 3 x 1 Zellen auf einer Kachel, Mitte abgewählt -> zwei getrennte Kacheln
+    plan = plan_plate(BaseplateSpec(drawer_x=127, drawer_y=43, clearance=0.5, disabled=[[1, 0]]))
+    assert len(plan.tiles) == 2 and all(len(t.cells) == 1 for t in plan.tiles)

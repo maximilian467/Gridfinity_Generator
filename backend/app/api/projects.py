@@ -123,15 +123,14 @@ def assign(pid: str, body: AssignBody, user: Principal = Depends(current_user)) 
 
 def new_insert_for(p: ProjectSpec, obj, user: Principal) -> InsertSpec:
     """Einlage für ein Werkzeug nach der Mustervorlage; Greifmulde gleich als bearbeitbare Mulde."""
-    ins = apply_template(p, InsertSpec(name=obj.name, project_id=p.id,
+    ins = apply_template(p, InsertSpec(name=obj.name, project_id=p.id, auto_grip=False,
                                        placements=[Placement(object_id=obj.id, x=0, y=0, rot_deg=0)]))
-    if ins.auto_grip and obj.profile is not None and obj.contour_mm:
-        lay = compute_layout(ins, {obj.id: obj})
+    if p.template.auto_grip and obj.profile is not None and obj.contour_mm:
+        lay = compute_layout(ins.model_copy(update={"auto_grip": True}), {obj.id: obj})
         r = lambda v: round(v, 1)  # noqa: E731
         grips = [g.params.model_copy(update={"x": r(g.params.x), "y": r(g.params.y), "l": r(g.params.l)})
                  for g in lay.grips if g.auto and g.params]
-        ins = ins.model_copy(update={"auto_grip": False, "grip_recesses": grips,
-                                     "overrides": [*ins.overrides, "auto_grip"]})
+        ins = ins.model_copy(update={"grip_recesses": grips})
     return storage.create_insert(ins, user)
 
 
@@ -151,8 +150,10 @@ def generate(pid: str, body: GenerateBody, user: Principal = Depends(current_use
         want = set(body.object_ids)
         objs = [o for o in storage.list_objects(user) if o.id in want]
     created, skipped = [], []
+    already = []
     for o in objs:
-        if o.id in have and body.object_ids is None:
+        if o.id in have:                      # hat schon eine Einlage im Projekt
+            already.append(o.name)
             continue
         if o.profile is None or not o.contour_mm:
             skipped.append(o.name)
@@ -161,7 +162,7 @@ def generate(pid: str, body: GenerateBody, user: Principal = Depends(current_use
             o.project_id = pid
             storage.save_object(o)
         created.append(new_insert_for(p, o, user).id)
-    res = {"created": created, "skipped": skipped}
+    res = {"created": created, "skipped": skipped, "already": already}
     if body.arrange:
         res.update(arrange(pid, ArrangeBody(mode="missing"), user))
     return res
@@ -169,6 +170,8 @@ def generate(pid: str, body: GenerateBody, user: Principal = Depends(current_use
 
 def _footprint(ins: InsertSpec, user: Principal) -> tuple[int, int, float, dict]:
     objs = storage.objects_for(ins, user)
+    if not ins.placements or any(o.profile is None or not o.contour_mm for o in objs.values()):
+        raise ValueError("Werkzeug noch nicht fertig gescannt")
     lay = compute_layout(ins, objs)
     return lay.grid_x, lay.grid_y, lay.total_height, objs
 
@@ -185,10 +188,12 @@ def arrange(pid: str, body: ArrangeBody, user: Principal = Depends(current_user)
     ids = {i.id: i for i in project_inserts(p)}
     keep = [q for q in p.placements if q.insert_id in ids] if body.mode == "missing" else []
     sizes: dict[str, tuple[int, int]] = {}
+    broken: list[str] = []
     for iid, ins in ids.items():
         try:
             gx, gy, _, _ = _footprint(ins, user)
         except (KeyError, ValueError, IndexError):
+            broken.append(iid)                # Werkzeug fehlt oder ist unfertig: kann nicht hinein
             continue
         sizes[iid] = (gx, gy)
     for q in keep:
@@ -198,9 +203,11 @@ def arrange(pid: str, body: ArrangeBody, user: Principal = Depends(current_user)
     kept = {q.insert_id for q in keep}
     items = [Item(iid, *sizes[iid]) for iid in sizes if iid not in kept]
     placed, left = pack(plan.nx, plan.ny, free, items)
+    keep = [q for q in keep if q.insert_id not in broken]
     p.placements = keep + [DrawerPlacement(insert_id=k, ix=v[0], iy=v[1], rot=v[2]) for k, v in placed.items()]
     storage.save_project(p)
-    return {"placed": list(placed), "left_out": left, "left_out_names": [ids[i].name for i in left]}
+    return {"placed": list(placed), "left_out": left, "left_out_names": [ids[i].name for i in left],
+            "unfinished": broken, "unfinished_names": [ids[i].name for i in broken]}
 
 
 def _tool_payload(ins: InsertSpec, lay, objs: dict) -> list[dict]:
@@ -295,15 +302,21 @@ def place(pid: str, body: PlaceBody, user: Principal = Depends(current_user)) ->
             raise HTTPException(404, "Einlage nicht gefunden") from None
         if ins.project_id != pid:
             raise HTTPException(422, "Einlage gehört nicht zu diesem Projekt")
-        plan = plan_plate(p.drawer)
+        try:
+            plan = plan_plate(p.drawer)
+            gx, gy, _, _ = _footprint(ins, user)
+        except (KeyError, ValueError, IndexError) as e:
+            raise HTTPException(422, f"{ins.name} lässt sich nicht einsetzen: Werkzeug fehlt oder ist noch nicht fertig gescannt ({e}).") from e
         free = set(plan.active)
         ids = {i.id: i for i in project_inserts(p)}
         for q in others:
             if q.insert_id in ids:
-                gx, gy, _, _ = _footprint(ids[q.insert_id], user)
-                w, h = (gx, gy) if q.rot == 0 else (gy, gx)
+                try:
+                    qx, qy, _, _ = _footprint(ids[q.insert_id], user)
+                except (KeyError, ValueError, IndexError):
+                    continue
+                w, h = (qx, qy) if q.rot == 0 else (qy, qx)
                 free -= {(i, j) for i in range(q.ix, q.ix + w) for j in range(q.iy, q.iy + h)}
-        gx, gy, _, _ = _footprint(ins, user)
         w, h = (gx, gy) if body.placement.rot == 0 else (gy, gx)
         if not fits(free, body.placement.ix, body.placement.iy, w, h):
             raise HTTPException(409, "Dort ist kein Platz (Rand, abgewählte Zelle oder andere Einlage).")
