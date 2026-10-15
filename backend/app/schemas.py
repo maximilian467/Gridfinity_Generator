@@ -39,6 +39,7 @@ class ObjectSpec(BaseModel):
     warnings: list[str] = []
     photos: dict[str, dict] = {}
     owner_id: int | None = None           # setzt nur der Server
+    project_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")   # im Projekt gescannt
 
 
 class Placement(BaseModel):
@@ -88,6 +89,17 @@ class ColorSkin(BaseModel):
     show_top_ring: bool = True
 
 
+Hex = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
+
+
+class PartColors(BaseModel):
+    """Druckfarben je Teil (Anzeige und Zuordnung der Filament-Slots)."""
+    body: Hex = "#3b3f45"
+    pocket: Hex = "#f26b1d"
+    grip: Hex = "#f26b1d"
+    compartment: Hex = "#3b3f45"
+
+
 class InsertSpec(BaseModel):
     id: str = Field("", max_length=40)
     name: str = Field("Einlage", max_length=120)
@@ -125,6 +137,9 @@ class InsertSpec(BaseModel):
     compartments: Annotated[list[Compartment], Field(max_length=60)] = []
     colors: ColorSlots = Field(default_factory=ColorSlots)
     color_skin: ColorSkin = Field(default_factory=ColorSkin)
+    color_hex: PartColors = Field(default_factory=PartColors)
+    project_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    overrides: Annotated[list[str], Field(max_length=40)] = []   # Felder, die von der Projektvorlage abweichen
 
 
 class BaseplateSpec(BaseModel):
@@ -136,3 +151,56 @@ class BaseplateSpec(BaseModel):
     magnets: bool = False
     one_sided: bool = False
     disabled: Annotated[list[Annotated[list[int], Field(min_length=2, max_length=2)]], Field(max_length=2500)] = []   # abgewählte Zellen [ix, iy]
+
+
+# ---- Projekte (Schublade als digitaler Klon) --------------------------------------
+
+# Felder einer Einlage, die die Projektvorlage vorgibt (Liste hier erweitern/kürzen genügt)
+TEMPLATE_FIELDS = ("height_mm", "sink", "stacking_lip", "magnets", "clearance_xy", "clearance_end", "clearance_z",
+                   "floor_min", "min_wall", "smooth_mm", "auto_grip", "grip_width", "grip_overhang",
+                   "grip_depth_below", "comp_min_size", "comp_wall", "comp_depth", "comp_follow", "color_hex",
+                   "color_skin")
+
+
+class InsertTemplate(BaseModel):
+    """Mustervorlage: Grundeinstellungen aller Einlagen eines Projekts (Standardwerte wie InsertSpec)."""
+    height_mm: float | None = Field(None, ge=10, le=250)
+    sink: float = Field(0.65, ge=0.2, le=1.0)
+    stacking_lip: bool = True
+    magnets: bool = False
+    clearance_xy: float = Field(2.5, ge=0, le=10)
+    clearance_end: float = Field(1.0, ge=0, le=20)
+    clearance_z: float = Field(0.4, ge=0, le=10)
+    floor_min: float = Field(1.5, ge=0.4, le=20)
+    min_wall: float = Field(1.6, ge=0.4, le=20)
+    smooth_mm: float = Field(3.0, ge=0, le=10)
+    auto_grip: bool = True
+    grip_width: float = Field(20.0, ge=4, le=80)
+    grip_overhang: float = Field(15.0, ge=0, le=100)
+    grip_depth_below: float = Field(8.0, ge=0, le=100)
+    comp_min_size: float = Field(20.0, ge=5, le=300)
+    comp_wall: float = Field(1.6, ge=0.4, le=20)
+    comp_depth: float | None = Field(None, ge=0, le=200)
+    comp_follow: bool = True
+    color_hex: PartColors = Field(default_factory=PartColors)
+    color_skin: ColorSkin = Field(default_factory=ColorSkin)
+
+
+class DrawerPlacement(BaseModel):
+    """Einlage im Raster der Schublade: linke untere Zelle (ix, iy), gedreht um 90° oder nicht."""
+    insert_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    ix: int = Field(ge=0, le=60)
+    iy: int = Field(ge=0, le=60)
+    rot: Literal[0, 90] = 0
+
+
+class ProjectSpec(BaseModel):
+    id: str = Field("", max_length=40)
+    name: str = Field("Schublade", max_length=120)
+    owner_id: int | None = None           # setzt nur der Server
+    created_at: str = Field("", max_length=40)
+    drawer: BaseplateSpec = Field(default_factory=lambda: BaseplateSpec(drawer_x=500, drawer_y=350))
+    drawer_h: float | None = Field(None, ge=5, le=1000)      # Innenhöhe der Schublade (Warnung, wenn zu hoch)
+    template: InsertTemplate = Field(default_factory=InsertTemplate)
+    placements: Annotated[list[DrawerPlacement], Field(max_length=200)] = []
+    notes: str = Field("", max_length=2000)

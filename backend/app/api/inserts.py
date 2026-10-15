@@ -108,6 +108,13 @@ def set_standard_height(body: StandardHeightBody, user: Principal = Depends(curr
 @router.post("", response_model=InsertSpec)
 def create(spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertSpec:
     storage.check_placements(spec, user)
+    if spec.project_id:                      # im Projekt: Mustervorlage statt Standardhöhe
+        from .projects import apply_template
+        try:
+            proj = storage.load_project(spec.project_id, user)
+        except KeyError:
+            raise HTTPException(404, "Projekt nicht gefunden") from None
+        return storage.create_insert(apply_template(proj, spec), user)
     if spec.height_mm is None and spec.height_u is None and "height_mm" not in spec.model_fields_set:
         std = standard_height(user)
         if std:
@@ -132,6 +139,11 @@ def get(iid: str, user: Principal = Depends(current_user)) -> InsertSpec:
 def put(iid: str, spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertSpec:
     old = get(iid, user)
     storage.check_placements(spec, user)
+    if spec.project_id and spec.project_id != old.project_id:
+        try:
+            storage.load_project(spec.project_id, user)
+        except KeyError:
+            raise HTTPException(404, "Projekt nicht gefunden") from None
     spec = spec.model_copy(update={"id": iid, "owner_id": old.owner_id, "created_at": old.created_at})
     storage.save_insert(spec)
     return spec

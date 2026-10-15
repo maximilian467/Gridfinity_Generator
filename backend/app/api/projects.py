@@ -1,0 +1,308 @@
+"""Projekte: eine Schublade als digitaler Klon (Baseplate, Einlagen, Werkzeuge, Mustervorlage).
+
+Einstellungen: Die Mustervorlage (template) gilt für alle Einlagen des Projekts. Ändert sich die
+Vorlage, übernehmen alle Einlagen die neuen Werte, außer den Feldern, die eine Einlage bewusst
+überschreibt (InsertSpec.overrides). Die Liste der vererbten Felder steht in schemas.TEMPLATE_FIELDS.
+"""
+from __future__ import annotations
+
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from .. import storage
+from ..auth import Principal, current_user
+from ..geometry.baseplate import plan_info, plan_plate
+from ..geometry.gridfinity import PITCH
+from ..geometry.layout import compute_layout
+from ..geometry.packing import Item, fits, pack
+from ..schemas import TEMPLATE_FIELDS, DrawerPlacement, InsertSpec, Placement, ProjectSpec
+from .inserts import layout_payload, standard_height
+
+router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+def _get(pid: str, user: Principal) -> ProjectSpec:
+    try:
+        return storage.load_project(pid, user)
+    except KeyError:
+        raise HTTPException(404, "Projekt nicht gefunden") from None
+
+
+def project_inserts(p: ProjectSpec) -> list[InsertSpec]:
+    return [i for i in storage._read_inserts() if i.project_id == p.id]
+
+
+def apply_template(p: ProjectSpec, ins: InsertSpec) -> InsertSpec:
+    """Vorlagenwerte in die Einlage übernehmen, außer den überschriebenen Feldern."""
+    upd = {f: getattr(p.template, f) for f in TEMPLATE_FIELDS if f not in ins.overrides}
+    return ins.model_copy(update=upd, deep=True)
+
+
+@router.get("", response_model=list[ProjectSpec])
+def list_(all: bool = False, user: Principal = Depends(current_user)) -> list[ProjectSpec]:
+    return storage.list_projects(user, all_=all)
+
+
+class NewProject(BaseModel):
+    name: str = Field("Schublade", max_length=120)
+    drawer_x: float = Field(500, ge=20, le=2000)
+    drawer_y: float = Field(350, ge=20, le=2000)
+
+
+@router.post("", response_model=ProjectSpec)
+def create(body: NewProject, user: Principal = Depends(current_user)) -> ProjectSpec:
+    p = ProjectSpec(name=body.name.strip() or "Schublade")
+    p.drawer.drawer_x, p.drawer.drawer_y = body.drawer_x, body.drawer_y
+    std = standard_height(user)
+    if std:                                   # alle Einlagen gleich hoch: Standardhöhe als Vorlage
+        p.template.height_mm = std[0]
+    return storage.create_project(p, user)
+
+
+@router.get("/{pid}", response_model=ProjectSpec)
+def get(pid: str, user: Principal = Depends(current_user)) -> ProjectSpec:
+    return _get(pid, user)
+
+
+@router.put("/{pid}", response_model=ProjectSpec)
+def put(pid: str, spec: ProjectSpec, user: Principal = Depends(current_user)) -> ProjectSpec:
+    old = _get(pid, user)
+    spec = spec.model_copy(update={"id": pid, "owner_id": old.owner_id, "created_at": old.created_at})
+    storage.save_project(spec)
+    if spec.template != old.template:          # Vorlage geändert: an alle Einlagen weitergeben
+        for ins in project_inserts(spec):
+            new = apply_template(spec, ins)
+            if new != ins:
+                storage.save_insert(new)
+    return spec
+
+
+@router.delete("/{pid}")
+def delete(pid: str, user: Principal = Depends(current_user)) -> dict:
+    """Löscht nur das Projekt; Einlagen und Werkzeuge bleiben (ohne Projekt) erhalten."""
+    p = _get(pid, user)
+    for ins in project_inserts(p):
+        storage.save_insert(ins.model_copy(update={"project_id": None, "overrides": []}))
+    for o in storage.list_objects(user, all_=True):
+        if o.project_id == pid:
+            o.project_id = None
+            storage.save_object(o)
+    storage.delete_project(pid)
+    return {"ok": True}
+
+
+class AssignBody(BaseModel):
+    kind: Literal["insert", "object"]
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    member: bool = True
+
+
+@router.post("/{pid}/assign")
+def assign(pid: str, body: AssignBody, user: Principal = Depends(current_user)) -> dict:
+    """Einlage oder Werkzeug dem Projekt zuordnen (oder herausnehmen)."""
+    p = _get(pid, user)
+    try:
+        if body.kind == "insert":
+            ins = storage.load_insert(body.id, user)
+            ins = apply_template(p, ins.model_copy(update={"project_id": pid, "overrides": []})) if body.member \
+                else ins.model_copy(update={"project_id": None, "overrides": []})
+            storage.save_insert(ins)
+            if not body.member:
+                p.placements = [q for q in p.placements if q.insert_id != body.id]
+                storage.save_project(p)
+        else:
+            o = storage.load_object(body.id, user)
+            o.project_id = pid if body.member else None
+            storage.save_object(o)
+    except KeyError:
+        raise HTTPException(404, "Nicht gefunden") from None
+    return {"ok": True}
+
+
+def new_insert_for(p: ProjectSpec, obj, user: Principal) -> InsertSpec:
+    """Einlage für ein Werkzeug nach der Mustervorlage; Greifmulde gleich als bearbeitbare Mulde."""
+    ins = apply_template(p, InsertSpec(name=obj.name, project_id=p.id,
+                                       placements=[Placement(object_id=obj.id, x=0, y=0, rot_deg=0)]))
+    if ins.auto_grip and obj.profile is not None and obj.contour_mm:
+        lay = compute_layout(ins, {obj.id: obj})
+        r = lambda v: round(v, 1)  # noqa: E731
+        grips = [g.params.model_copy(update={"x": r(g.params.x), "y": r(g.params.y), "l": r(g.params.l)})
+                 for g in lay.grips if g.auto and g.params]
+        ins = ins.model_copy(update={"auto_grip": False, "grip_recesses": grips,
+                                     "overrides": [*ins.overrides, "auto_grip"]})
+    return storage.create_insert(ins, user)
+
+
+class GenerateBody(BaseModel):
+    object_ids: list[str] | None = Field(None, max_length=200)    # None = alle Werkzeuge ohne Einlage
+    arrange: bool = True
+
+
+@router.post("/{pid}/generate")
+def generate(pid: str, body: GenerateBody, user: Principal = Depends(current_user)) -> dict:
+    """Für alle Werkzeuge des Projekts ohne Einlage eine Einlage nach der Vorlage anlegen und
+    (optional) alles in der Schublade anordnen."""
+    p = _get(pid, user)
+    have = {pl.object_id for ins in project_inserts(p) for pl in ins.placements}
+    objs = [o for o in storage.list_objects(user) if o.project_id == pid]
+    if body.object_ids is not None:
+        want = set(body.object_ids)
+        objs = [o for o in storage.list_objects(user) if o.id in want]
+    created, skipped = [], []
+    for o in objs:
+        if o.id in have and body.object_ids is None:
+            continue
+        if o.profile is None or not o.contour_mm:
+            skipped.append(o.name)
+            continue
+        if o.project_id != pid:
+            o.project_id = pid
+            storage.save_object(o)
+        created.append(new_insert_for(p, o, user).id)
+    res = {"created": created, "skipped": skipped}
+    if body.arrange:
+        res.update(arrange(pid, ArrangeBody(mode="missing"), user))
+    return res
+
+
+def _footprint(ins: InsertSpec, user: Principal) -> tuple[int, int, float, dict]:
+    objs = storage.objects_for(ins, user)
+    lay = compute_layout(ins, objs)
+    return lay.grid_x, lay.grid_y, lay.total_height, objs
+
+
+class ArrangeBody(BaseModel):
+    mode: Literal["all", "missing"] = "missing"      # all: alles neu anordnen; missing: nur, was noch fehlt
+
+
+@router.post("/{pid}/arrange")
+def arrange(pid: str, body: ArrangeBody, user: Principal = Depends(current_user)) -> dict:
+    p = _get(pid, user)
+    plan = plan_plate(p.drawer)
+    free = set(plan.active)
+    ids = {i.id: i for i in project_inserts(p)}
+    keep = [q for q in p.placements if q.insert_id in ids] if body.mode == "missing" else []
+    sizes: dict[str, tuple[int, int]] = {}
+    for iid, ins in ids.items():
+        try:
+            gx, gy, _, _ = _footprint(ins, user)
+        except (KeyError, ValueError, IndexError):
+            continue
+        sizes[iid] = (gx, gy)
+    for q in keep:
+        if q.insert_id in sizes:
+            w, h = sizes[q.insert_id] if q.rot == 0 else sizes[q.insert_id][::-1]
+            free -= {(i, j) for i in range(q.ix, q.ix + w) for j in range(q.iy, q.iy + h)}
+    kept = {q.insert_id for q in keep}
+    items = [Item(iid, *sizes[iid]) for iid in sizes if iid not in kept]
+    placed, left = pack(plan.nx, plan.ny, free, items)
+    p.placements = keep + [DrawerPlacement(insert_id=k, ix=v[0], iy=v[1], rot=v[2]) for k, v in placed.items()]
+    storage.save_project(p)
+    return {"placed": list(placed), "left_out": left, "left_out_names": [ids[i].name for i in left]}
+
+
+def _tool_payload(ins: InsertSpec, lay, objs: dict) -> list[dict]:
+    """Werkzeuge der Einlage für die 3D-Ansicht: Kontur, Ober-/Unterseite, Lage in der Einlage."""
+    out = []
+    sx, sy = lay.shift
+    for k, pl in enumerate(ins.placements):
+        o = objs.get(pl.object_id)
+        if o is None or o.profile is None:
+            continue
+        T = max(o.profile.top)
+        sink = lay.sink[k] if k < len(lay.sink) else ins.sink
+        z_rest = lay.z_surface - sink * T + ins.overhang
+        step = max(1, len(o.profile.s) // 160)            # Low-Poly: höchstens ca. 160 Stützstellen
+        out.append({
+            "object_id": o.id, "name": o.name, "contour": o.contour_mm,
+            "s": o.profile.s[::step], "bottom": o.profile.bottom[::step], "top": o.profile.top[::step],
+            "z_rest": z_rest, "x": pl.x + sx, "y": pl.y + sy, "rot_deg": pl.rot_deg,
+            "has_texture": "top" in o.photos and bool(o.photos["top"].get("mask_url")),
+        })
+    return out
+
+
+@router.get("/{pid}/clone")
+def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
+    """Alles für die Schubladen-Ansicht: Baseplate-Plan, Einlagen (Layout, Lage, Farben), Werkzeuge."""
+    p = _get(pid, user)
+    try:
+        plan = plan_plate(p.drawer)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    pos = {q.insert_id: q for q in p.placements}
+    inserts, warnings, heights = [], [], []
+    occupied: dict[tuple[int, int], str] = {}
+    for ins in project_inserts(p):
+        item = {"id": ins.id, "name": ins.name, "colors": ins.color_hex.model_dump(), "overrides": ins.overrides,
+                "placed": pos[ins.id].model_dump() if ins.id in pos else None, "error": None}
+        try:
+            objs = storage.objects_for(ins, user)
+            if not ins.placements or any(o.profile is None or not o.contour_mm for o in objs.values()):
+                raise ValueError("Werkzeug noch nicht fertig gescannt")
+            lay = compute_layout(ins, objs)
+            item.update(gx=lay.grid_x, gy=lay.grid_y, total_height=lay.total_height,
+                        layout=layout_payload(ins, user), tools=_tool_payload(ins, lay, objs))
+            if ins.id in pos:
+                heights.append((lay.total_height, ins.name))
+                q = pos[ins.id]
+                w, h = (lay.grid_x, lay.grid_y) if q.rot == 0 else (lay.grid_y, lay.grid_x)
+                for c in [(i, j) for i in range(q.ix, q.ix + w) for j in range(q.iy, q.iy + h)]:
+                    if c not in plan.active:
+                        warnings.append(f"{ins.name} liegt außerhalb der Baseplate oder auf einer abgewählten Zelle.")
+                        break
+                    if c in occupied:
+                        warnings.append(f"{ins.name} überlappt {occupied[c]}.")
+                        break
+                    occupied[c] = ins.name
+        except (KeyError, ValueError, IndexError) as e:
+            item["error"] = str(e) if not isinstance(e, KeyError) else "Werkzeug fehlt"
+        inserts.append(item)
+    if heights:
+        hs = [h for h, _ in heights]
+        if max(hs) - min(hs) > 0.05:
+            low = min(heights)[1]
+            high = max(heights)[1]
+            warnings.append(f"Einlagen unterschiedlich hoch: {min(hs):.1f} mm ({low}) bis {max(hs):.1f} mm ({high}).")
+        if p.drawer_h and max(hs) > p.drawer_h:
+            warnings.append(f"Höchste Einlage ({max(hs):.1f} mm) ist höher als die Schublade ({p.drawer_h:.0f} mm).")
+    return {"plan": plan_info(p.drawer, plan), "pitch": PITCH, "inserts": inserts,
+            "warnings": list(dict.fromkeys(warnings)),
+            "heights_equal": bool(heights) and max(h for h, _ in heights) - min(h for h, _ in heights) <= 0.05}
+
+
+class PlaceBody(BaseModel):
+    placement: DrawerPlacement | None = None     # None = aus der Schublade nehmen
+    insert_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+
+
+@router.post("/{pid}/place")
+def place(pid: str, body: PlaceBody, user: Principal = Depends(current_user)) -> dict:
+    """Eine Einlage von Hand setzen/verschieben/drehen oder herausnehmen. Prüft Platz."""
+    p = _get(pid, user)
+    others = [q for q in p.placements if q.insert_id != body.insert_id]
+    if body.placement is not None:
+        try:
+            ins = storage.load_insert(body.insert_id, user)
+        except KeyError:
+            raise HTTPException(404, "Einlage nicht gefunden") from None
+        if ins.project_id != pid:
+            raise HTTPException(422, "Einlage gehört nicht zu diesem Projekt")
+        plan = plan_plate(p.drawer)
+        free = set(plan.active)
+        ids = {i.id: i for i in project_inserts(p)}
+        for q in others:
+            if q.insert_id in ids:
+                gx, gy, _, _ = _footprint(ids[q.insert_id], user)
+                w, h = (gx, gy) if q.rot == 0 else (gy, gx)
+                free -= {(i, j) for i in range(q.ix, q.ix + w) for j in range(q.iy, q.iy + h)}
+        gx, gy, _, _ = _footprint(ins, user)
+        w, h = (gx, gy) if body.placement.rot == 0 else (gy, gx)
+        if not fits(free, body.placement.ix, body.placement.iy, w, h):
+            raise HTTPException(409, "Dort ist kein Platz (Rand, abgewählte Zelle oder andere Einlage).")
+        others.append(body.placement.model_copy(update={"insert_id": body.insert_id}))
+    p.placements = others
+    storage.save_project(p)
+    return {"ok": True, "placements": [q.model_dump() for q in p.placements]}

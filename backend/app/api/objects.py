@@ -312,6 +312,32 @@ class LevelsBody(BaseModel):
     levels: Annotated[list[Annotated[list[float], Field(min_length=3, max_length=3)]], Field(min_length=1, max_length=8)]
 
 
+@router.get("/{oid}/texture")
+def texture(oid: str, user: Principal = Depends(current_user)) -> dict:
+    """Farbbild der Oberseite in Werkzeug-Koordinaten (für die 3D-Ansicht); wird zwischengespeichert."""
+    from ..vision.texture import make_texture
+    spec = _obj(oid, user)
+    d = storage.object_dir(oid)
+    ph = spec.photos.get("top") or {}
+    if not spec.contour_mm or not (d / "top_mask.png").exists() or not (d / "top_rect_view.jpg").exists():
+        raise HTTPException(404, "Kein Foto der Draufsicht")
+    out = d / "top_texture.png"
+    meta_f = d / "top_texture.json"
+    src = max((d / f).stat().st_mtime for f in ("object.json", "top_mask.png", "top_rect_view.jpg"))
+    if not (out.exists() and meta_f.exists() and out.stat().st_mtime >= src):
+        rect = cv2.imread(str(d / "top_rect_view.jpg"))
+        mask = cv2.imread(str(d / "top_mask.png"), cv2.IMREAD_GRAYSCALE)
+        try:
+            meta = make_texture(rect, float(ph.get("view_scale", VIEW_SCALE)), mask, spec.contour_mm, out)
+        except ValueError as e:
+            raise HTTPException(422, f"Textur nicht möglich: {e}") from e
+        import json
+        meta_f.write_text(json.dumps(meta), encoding="utf-8")
+    import json
+    meta = json.loads(meta_f.read_text(encoding="utf-8"))
+    return {"url": storage.url_for(out) + f"?v={int(out.stat().st_mtime)}", **meta}
+
+
 @router.put("/{oid}/levels", response_model=ObjectSpec)
 def set_levels(oid: str, body: LevelsBody, user: Principal = Depends(current_user)) -> ObjectSpec:
     """Ebenen von Hand setzen, ohne die Fotos neu auszuwerten (schnell; geht auch für die Demo).

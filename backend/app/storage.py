@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import config
-from .schemas import InsertSpec, ObjectSpec
+from .schemas import InsertSpec, ObjectSpec, ProjectSpec
 
 if TYPE_CHECKING:
     from .auth import Principal
@@ -115,6 +115,53 @@ def list_objects(user: Principal, all_: bool = False) -> list[ObjectSpec]:
 
 def delete_object(oid: str) -> None:
     shutil.rmtree(object_dir(oid), ignore_errors=True)
+
+
+# ---- Projekte -----------------------------------------------------------------
+def project_dir(pid: str) -> Path:
+    return _root("projects") / check_id(pid)
+
+
+def _read_projects() -> list[ProjectSpec]:
+    out = []
+    for d in sorted(_root("projects").iterdir()):
+        if (d / "project.json").exists():
+            out.append(ProjectSpec.model_validate_json((d / "project.json").read_text(encoding="utf-8")))
+    return out
+
+
+def create_project(spec: ProjectSpec, owner: Principal) -> ProjectSpec:
+    if sum(1 for p in _read_projects() if p.owner_id == owner.id) >= MAX_ITEMS:
+        raise TooMany(f"Höchstens {MAX_ITEMS} Projekte je Nutzer.")
+    spec = spec.model_copy(update={"id": new_id(), "owner_id": owner.id,
+                                   "created_at": datetime.now(timezone.utc).isoformat()})
+    save_project(spec)
+    return spec
+
+
+def save_project(spec: ProjectSpec) -> None:
+    d = project_dir(spec.id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "project.json").write_text(spec.model_dump_json(indent=1), encoding="utf-8")
+
+
+def load_project(pid: str, user: Principal | None) -> ProjectSpec:
+    f = project_dir(pid) / "project.json"
+    if not f.exists():
+        raise KeyError(pid)
+    spec = ProjectSpec.model_validate_json(f.read_text(encoding="utf-8"))
+    if user is not None and not can_access(spec.owner_id, user):
+        raise KeyError(pid)
+    return spec
+
+
+def list_projects(user: Principal, all_: bool = False) -> list[ProjectSpec]:
+    out = [p for p in _read_projects() if _visible(p.owner_id, user, all_)]
+    return sorted(out, key=lambda p: p.created_at, reverse=True)
+
+
+def delete_project(pid: str) -> None:
+    shutil.rmtree(project_dir(pid), ignore_errors=True)
 
 
 # ---- Nutzereinstellungen ------------------------------------------------------
