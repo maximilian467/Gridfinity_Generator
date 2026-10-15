@@ -135,3 +135,4 @@ class BaseplateSpec(BaseModel):
     clearance: float = Field(0.5, ge=0, le=50)
     magnets: bool = False
     one_sided: bool = False
+    disabled: Annotated[list[Annotated[list[int], Field(min_length=2, max_length=2)]], Field(max_length=2500)] = []   # abgewählte Zellen [ix, iy]

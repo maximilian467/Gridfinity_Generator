@@ -105,6 +105,13 @@ export interface Job {
 export interface BaseplateSpec {
   drawer_x: number; drawer_y: number; bed_x: number; bed_y: number
   clearance: number; magnets: boolean; one_sided: boolean
+  disabled?: [number, number][]
+}
+export interface PlateRing { exterior: number[][]; holes: number[][][] }
+export interface PlatePlan {
+  cells_x: number; cells_y: number; origin: [number, number]; rim: [number, number, number, number]
+  rest_x: number; rest_y: number; tiles_x: number; tiles_y: number; active: [number, number][]; plate_h: number
+  tiles: { n: number; cells: [number, number][]; w: number; h: number; x0: number; y0: number; polygons: PlateRing[] }[]
 }
 
 export interface Me { user: string; id: number; name: string; role: 'admin' | 'user'; auth: boolean }

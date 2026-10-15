@@ -4,7 +4,7 @@ export interface SegmentResult {
   edit_contour_px?: [number, number][]
 }
 
-import type { AdminUser, AuditEntry, AuthConfig, BaseplateSpec, InsertSpec, Job, LayoutOut, Me, ObjectSpec, PhotoMeta } from './types'
+import type { AdminUser, AuditEntry, AuthConfig, BaseplateSpec, InsertSpec, Job, LayoutOut, Me, ObjectSpec, PhotoMeta, PlatePlan } from './types'
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch('/api' + url, init)
@@ -77,5 +77,6 @@ export const api = {
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/at`, json('POST', { spec, x, y })),
 
   job: (id: string) => req<Job>(`/jobs/${id}`),
+  planBaseplate: (spec: BaseplateSpec) => req<PlatePlan>('/baseplates/plan', json('POST', spec)),
   buildBaseplate: (spec: BaseplateSpec) => req<{ job_id: string }>('/baseplates/build', json('POST', spec)),
 }
