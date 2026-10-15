@@ -50,4 +50,6 @@ def make_texture(rect_view: np.ndarray, view_scale: float, mask: np.ndarray, con
     ring = np.asarray(target.exterior.coords)
     cv2.fillPoly(alpha, [np.round(np.column_stack([(ring[:, 0] - x0) * PX_MM, (y1 - ring[:, 1]) * PX_MM])).astype(np.int32)], 255)
     cv2.imwrite(str(out), np.dstack([img, alpha]))
-    return {"x0": x0, "x1": x0 + (W - 1) / PX_MM, "y0": y1 - (H - 1) / PX_MM, "y1": y1, "iou": round(best[0], 3)}
+    inside = img[alpha > 0]
+    b, g, r = (np.median(inside, axis=0) if len(inside) else (180, 180, 180))
+    return {"color": f"#{int(r):02x}{int(g):02x}{int(b):02x}","x0": x0, "x1": x0 + (W - 1) / PX_MM, "y0": y1 - (H - 1) / PX_MM, "y1": y1, "iou": round(best[0], 3)}

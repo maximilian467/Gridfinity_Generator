@@ -145,8 +145,9 @@ function Tool({ t, quality }: { t: CloneTool; quality: 'low' | 'high' }) {
     g.computeVertexNormals()
     return g
   }, [t, quality, tex])
+  // Oberseite/Unterseite mit Foto, Seitenwände in der mittleren Farbe des Werkzeugs
   const material = useMemo(() => tex
-    ? new THREE.MeshStandardMaterial({ map: tex.map, roughness: 0.6, alphaTest: 0.3, transparent: false })
+    ? [new THREE.MeshStandardMaterial({ map: tex.map, roughness: 0.6, alphaTest: 0.5 }), mat(tex.info.color ?? '#c9ccd1', { roughness: 0.6 })]
     : mat('#c9ccd1', { roughness: 0.5, metalness: 0.3 }), [tex])
   return (
     <group position={[t.x, t.y, 0]} rotation={[0, 0, (t.rot_deg * Math.PI) / 180]}>
