@@ -137,3 +137,16 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
 /* Grid-Kinder dürfen schmaler als ihr Inhalt werden. Sonst wächst eine Spalte mit einem
    Canvas (Konva) mit, das Canvas misst die zu große Breite und ragt in Nachbarspalten. */
 .grid > * { min-width: 0; }
+
+/* Rückfrage beim Überschreiben einer Projekteinstellung: Sprechblase, die kurz wackelt */
+.override-bubble { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; width: min(440px, calc(100vw - 32px));
+  display: grid; gap: 10px; padding: 12px 14px; border-radius: 14px; background: var(--surface); color: var(--ink);
+  border: 1.5px solid var(--warn); box-shadow: var(--shadow, 0 10px 30px rgba(0,0,0,.18)); }
+.override-bubble::after { content: ""; position: absolute; left: 32px; top: -8px; width: 14px; height: 14px; background: var(--surface);
+  border-left: 1.5px solid var(--warn); border-top: 1.5px solid var(--warn); transform: rotate(45deg); }
+.shake { animation: shake .42s cubic-bezier(.36,.07,.19,.97) both; }
+@keyframes shake {
+  10%, 90% { transform: translateX(calc(-50% - 1px)); } 20%, 80% { transform: translateX(calc(-50% + 3px)); }
+  30%, 50%, 70% { transform: translateX(calc(-50% - 6px)); } 40%, 60% { transform: translateX(calc(-50% + 6px)); }
+}
+@media (prefers-reduced-motion: reduce) { .shake { animation: none; } }

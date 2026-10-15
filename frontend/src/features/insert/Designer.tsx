@@ -3,7 +3,9 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useNavigate, useParams } from 'react-router'
 import { ArrowClockwise, CheckCircle, CrosshairSimple, DownloadSimple, Plus, Rows, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
-import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec } from '../../lib/types'
+import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec, PartColors, TemplateField } from '../../lib/types'
+import { FIELD_LABELS, TEMPLATE_FIELDS } from '../../lib/types'
+import { PartColorsEdit } from '../../components/ColorPick'
 import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
 import { arrange, placeNew } from '../../lib/placement'
 import { Editor2D } from './Editor2D'
@@ -22,6 +24,7 @@ function bake(sp: InsertSpec, dx: number, dy: number): InsertSpec {
   }
 }
 const round1 = (v: number) => Math.round(v * 10) / 10
+const DEFAULT_COLORS: PartColors = { body: '#3b3f45', pocket: '#f26b1d', grip: '#f26b1d', compartment: '#3b3f45' }
 
 /** Ausgeblendete Hinweise je Einlage (Zahlen zählen nicht: ändert sich nur ein Wert, bleibt er weg). */
 const warnKey = (w: string) => w.replace(/\d+([.,]\d+)?/g, '#')
@@ -73,7 +76,30 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   }
   const [tab, setTab] = useState<'layout' | '3d'>('layout')
   const [jobId, setJobId] = useState<string | null>(null)
-  const patch = (p: Partial<InsertSpec>) => setSpec((s) => ({ ...s, ...p }))
+  // Einlage im Projekt: Werte der Projektvorlage nur nach Rückfrage überschreiben (Sprechblase, wackelt)
+  const proj = useQuery({ queryKey: ['project', spec.project_id], queryFn: () => api.project(spec.project_id!), enabled: !!spec.project_id })
+  const [pending, setPending] = useState<{ p: Partial<InsertSpec>; fields: TemplateField[] } | null>(null)
+  const [shake, setShake] = useState(0)
+  const patch = (p: Partial<InsertSpec>) => {
+    const tpl = proj.data?.template as Record<string, unknown> | undefined
+    if (tpl) {
+      const fields = (Object.keys(p) as TemplateField[]).filter((k) => (TEMPLATE_FIELDS as readonly string[]).includes(k)
+        && !(spec.overrides ?? []).includes(k) && JSON.stringify((p as Record<string, unknown>)[k]) !== JSON.stringify(tpl[k]))
+      if (fields.length) { setPending({ p, fields }); setShake((n) => n + 1); return }
+    }
+    setSpec((s) => ({ ...s, ...p }))
+  }
+  const confirmOverride = () => {
+    if (!pending) return
+    setSpec((s) => ({ ...s, ...pending.p, overrides: [...new Set([...(s.overrides ?? []), ...pending.fields])] }))
+    setPending(null)
+  }
+  const resetField = (f: TemplateField) => {
+    const tpl = proj.data?.template
+    if (!tpl) return
+    setSpec((s) => ({ ...s, [f]: tpl[f], overrides: (s.overrides ?? []).filter((q) => q !== f) }))
+  }
+  const ownFields = (spec.overrides ?? []).filter((f): f is TemplateField => f !== 'auto_grip' && (TEMPLATE_FIELDS as readonly string[]).includes(f))
 
   const objects = useQuery({ queryKey: ['objects'], queryFn: () => api.objects(true) })
   const std = useQuery({ queryKey: ['standard-height'], queryFn: api.standardHeight, staleTime: 60_000 })
@@ -248,6 +274,18 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
       <aside className="panel p-3 grid gap-3 content-start overflow-y-auto overflow-x-hidden" style={{ borderRadius: 0, borderWidth: '0 1px 0 0', maxHeight: 'calc(100dvh - 56px)' }}>
         <Field label="Name"><input className="input" value={spec.name} onChange={(e) => patch({ name: e.target.value })} /></Field>
         <section className="grid gap-2">
+          {proj.data && (
+            <div className="panel p-2 grid gap-1.5" style={{ background: 'var(--accent-soft)', borderColor: 'transparent' }}>
+              <div className="text-sm">Projekt <button className="btn btn-sm" onClick={() => nav(`/project/${proj.data!.id}`)}>{proj.data.name}</button></div>
+              <div className="hint mt-0">Einstellungen kommen aus der Projektvorlage. {ownFields.length ? 'Eigene Werte:' : 'Keine eigenen Werte.'}</div>
+              {ownFields.map((f) => (
+                <div key={f} className="flex items-center gap-2 text-sm">
+                  <span className="flex-1">{FIELD_LABELS[f]}</span>
+                  <button className="btn btn-sm" onClick={() => resetField(f)} title="Wieder den Wert aus der Projektvorlage verwenden">Projektwert</button>
+                </div>
+              ))}
+            </div>
+          )}
           <h3 className="sect">Größe</h3>
           <div className="hint mt-0">Automatisch: kleinstes Raster und kleinste Höhe, in die alles passt.</div>
           <Check label="Raster automatisch" checked={spec.grid_x === null}
@@ -356,16 +394,8 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         </details>
 
         <section className="grid gap-2">
-          <h3 className="sect">Farben (Filament-Slot)</h3>
-          {([['body', 'Körper'], ['pocket', 'Taschen'], ['grip', 'Greifmulden'], ['compartment', 'Fächer']] as const).map(([key, label]) => (
-            <div key={key} className="flex items-center justify-between gap-2">
-              <span>{label}</span>
-              <select className="input" style={{ width: 80 }} value={spec.colors[key]}
-                onChange={(e) => patch({ colors: { ...spec.colors, [key]: +e.target.value } })}>
-                {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </div>
-          ))}
+          <h3 className="sect">Farben</h3>
+          <PartColorsEdit value={spec.color_hex ?? DEFAULT_COLORS} onChange={(v: PartColors) => patch({ color_hex: v })} />
           <div className="grid grid-cols-2 gap-2">
             <NumberField label="Haut Boden" value={spec.color_skin.floor} step={0.1} min={0.2} onChange={(v) => patch({ color_skin: { ...spec.color_skin, floor: v } })} />
             <NumberField label="Haut Wand" value={spec.color_skin.wall} step={0.1} min={0.2} onChange={(v) => patch({ color_skin: { ...spec.color_skin, wall: v } })} />
@@ -486,6 +516,17 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         )}
       </section>
 
+      {pending && (
+        <div key={shake} className="override-bubble shake" role="alertdialog" aria-live="assertive">
+          <div className="text-sm"><b>Projekteinstellung überschreiben?</b><br />
+            Das würde {pending.fields.map((f) => `„${FIELD_LABELS[f]}“`).join(', ')} aus dem Projekt „{proj.data?.name}“ für diese Einlage überschreiben.
+            Spätere Änderungen an der Vorlage gelten dann hier nicht mehr für {pending.fields.length > 1 ? 'diese Werte' : 'diesen Wert'}.</div>
+          <div className="flex gap-2 justify-end">
+            <button className="btn btn-sm" onClick={() => setPending(null)}>Abbrechen</button>
+            <button className="btn btn-sm btn-primary" onClick={confirmOverride} autoFocus>Überschreiben</button>
+          </div>
+        </div>
+      )}
       {/* Rechts */}
       <aside className="panel p-3 grid gap-4 content-start overflow-y-auto" style={{ borderRadius: 0, borderWidth: '0 0 0 1px', maxHeight: 'calc(100dvh - 56px)' }}>
         <SelectionPanel spec={spec} lay={lay} sel={sel} setSpec={setSpec} onSel={select} objMap={objMap} pocketPt={pocketPt}

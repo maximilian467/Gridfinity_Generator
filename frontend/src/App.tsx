@@ -12,6 +12,7 @@ import { ApiStatus, Initials } from './components/ui'
 const ScanWizard = lazy(() => import('./features/scan/ScanWizard').then((m) => ({ default: m.ScanWizard })))
 const Designer = lazy(() => import('./features/insert/Designer').then((m) => ({ default: m.Designer })))
 const Baseplate = lazy(() => import('./features/baseplate/Baseplate').then((m) => ({ default: m.Baseplate })))
+const ProjectPage = lazy(() => import('./features/project/ProjectPage').then((m) => ({ default: m.ProjectPage })))
 const Users = lazy(() => import('./features/admin/Users').then((m) => ({ default: m.Users })))
 
 const qc = new QueryClient({ defaultOptions: { queries: { refetchOnWindowFocus: false, retry: false } } })
@@ -56,6 +57,7 @@ const router = createBrowserRouter([
       { path: '/scan/:id', element: <ScanWizard /> },
       { path: '/insert/:id', element: <Designer /> },
       { path: '/baseplate', element: <Baseplate /> },
+      { path: '/project/:id', element: <ProjectPage /> },
       { path: '/admin/users', element: <Users /> },
     ],
   },

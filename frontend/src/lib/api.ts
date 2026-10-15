@@ -4,7 +4,7 @@ export interface SegmentResult {
   edit_contour_px?: [number, number][]
 }
 
-import type { AdminUser, AuditEntry, AuthConfig, BaseplateSpec, InsertSpec, Job, LayoutOut, Me, ObjectSpec, PhotoMeta, PlatePlan } from './types'
+import type { AdminUser, AuditEntry, AuthConfig, BaseplateSpec, CloneData, DrawerPlacement, InsertSpec, Job, LayoutOut, Me, ObjectSpec, PhotoMeta, PlatePlan, ProjectSpec, TextureInfo } from './types'
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch('/api' + url, init)
@@ -75,6 +75,21 @@ export const api = {
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/rect`, json('POST', { spec, x0, y0, x1, y1 })),
   compartmentAt: (spec: InsertSpec, x: number, y: number) =>
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/at`, json('POST', { spec, x, y })),
+
+  projects: (all = false) => req<ProjectSpec[]>(all ? '/projects?all=true' : '/projects'),
+  project: (id: string) => req<ProjectSpec>(`/projects/${id}`),
+  createProject: (name: string, drawer_x: number, drawer_y: number) => req<ProjectSpec>('/projects', json('POST', { name, drawer_x, drawer_y })),
+  saveProject: (p: ProjectSpec) => req<ProjectSpec>(`/projects/${p.id}`, json('PUT', p)),
+  deleteProject: (id: string) => req(`/projects/${id}`, json('DELETE')),
+  assign: (pid: string, kind: 'insert' | 'object', id: string, member = true) => req(`/projects/${pid}/assign`, json('POST', { kind, id, member })),
+  generate: (pid: string, object_ids: string[] | null = null, arrange = true) =>
+    req<{ created: string[]; skipped: string[]; placed?: string[]; left_out?: string[]; left_out_names?: string[] }>(`/projects/${pid}/generate`, json('POST', { object_ids, arrange })),
+  arrange: (pid: string, mode: 'all' | 'missing') =>
+    req<{ placed: string[]; left_out: string[]; left_out_names: string[] }>(`/projects/${pid}/arrange`, json('POST', { mode })),
+  clone: (pid: string) => req<CloneData>(`/projects/${pid}/clone`),
+  place: (pid: string, insert_id: string, placement: DrawerPlacement | null) =>
+    req<{ ok: boolean; placements: DrawerPlacement[] }>(`/projects/${pid}/place`, json('POST', { insert_id, placement })),
+  texture: (oid: string) => req<TextureInfo>(`/objects/${oid}/texture`),
 
   job: (id: string) => req<Job>(`/jobs/${id}`),
   planBaseplate: (spec: BaseplateSpec) => req<PlatePlan>('/baseplates/plan', json('POST', spec)),

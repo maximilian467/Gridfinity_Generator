@@ -17,11 +17,17 @@ def part_mesh(shape: cq.Workplane) -> trimesh.Trimesh:
     return tessellate(comp)
 
 
-def export_glb(parts, path: Path) -> Path:
+def hex_rgba(h: str) -> tuple[int, int, int, int]:
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255
+
+
+def export_glb(parts, path: Path, slot_colors: dict[int, str] | None = None) -> Path:
     scene = trimesh.Scene()
     for p in parts:
         m = part_mesh(p.shape)
-        m.visual.face_colors = SLOT_COLORS.get(p.slot, (180, 180, 180, 255))
+        m.visual.face_colors = (hex_rgba(slot_colors[p.slot]) if slot_colors and p.slot in slot_colors
+                                else SLOT_COLORS.get(p.slot, (180, 180, 180, 255)))
         scene.add_geometry(m, node_name=p.name, geom_name=p.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     scene.export(path)

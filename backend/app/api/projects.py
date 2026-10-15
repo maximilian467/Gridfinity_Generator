@@ -243,8 +243,13 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
             if not ins.placements or any(o.profile is None or not o.contour_mm for o in objs.values()):
                 raise ValueError("Werkzeug noch nicht fertig gescannt")
             lay = compute_layout(ins, objs)
+            from shapely.ops import unary_union
+
+            from .inserts import _polys
+            cut = unary_union([q.poly for q in lay.pieces] + [g.poly for g in lay.grips] + [c.poly for c in lay.comps])
             item.update(gx=lay.grid_x, gy=lay.grid_y, total_height=lay.total_height,
-                        layout=layout_payload(ins, user), tools=_tool_payload(ins, lay, objs))
+                        layout=layout_payload(ins, user), tools=_tool_payload(ins, lay, objs),
+                        cut_union=_polys(cut.simplify(0.05)))
             if ins.id in pos:
                 heights.append((lay.total_height, ins.name))
                 q = pos[ins.id]

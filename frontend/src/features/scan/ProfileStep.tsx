@@ -95,11 +95,15 @@ export function ProfileStep({ o: obj, header, bar }: {
 
   const o = calc.data ?? shown ?? obj
   const newInsert = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      if (o.project_id) {                 // im Projekt: Einlage nach Vorlage, gleich in die Schublade
+        await api.generate(o.project_id, [o.id], true)
+        return { project: o.project_id, id: '' }
+      }
       const base = { clearance_xy: 2.5, clearance_end: 1.0, min_wall: 1.6, placements: [] } as unknown as import('../../lib/types').InsertSpec
-      return api.createInsert({ name: `Einlage ${o.name}`, placements: [placeNew(base, {}, o)] })
+      return { project: null, id: (await api.createInsert({ name: `Einlage ${o.name}`, placements: [placeNew(base, {}, o)] })).id }
     },
-    onSuccess: (i) => nav(`/insert/${i.id}`),
+    onSuccess: (r) => nav(r.project ? `/project/${r.project}` : `/insert/${r.id}`),
   })
   const maxT = o.profile ? Math.max(...o.profile.top) : 0
 
@@ -188,7 +192,7 @@ export function ProfileStep({ o: obj, header, bar }: {
       {bar({
         status: calc.isPending || setLv.isPending ? 'Speichere Profil …' : edited ? 'Profil geändert …' : o.profile ? 'Objekt ist gespeichert.' : '',
         secondary: <button className="btn" onClick={() => nav('/')}>Zur Bibliothek</button>,
-        primary: { label: 'Einlage anlegen', onClick: () => newInsert.mutate(), disabled: !o.profile || calc.isPending, busy: newInsert.isPending },
+        primary: { label: o.project_id ? 'Einlage nach Projektvorlage' : 'Einlage anlegen', onClick: () => newInsert.mutate(), disabled: !o.profile || calc.isPending, busy: newInsert.isPending },
       })}
     </>
   )

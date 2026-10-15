@@ -21,7 +21,9 @@ def build_insert_job(out_dir: str, insert_json: str, objects_json: dict[str, str
     from .geometry.insert_cad import build_insert
 
     out = Path(out_dir)
-    spec = InsertSpec.model_validate_json(insert_json)
+    from .storage import slots_from_colors
+    spec = slots_from_colors(InsertSpec.model_validate_json(insert_json))
+    slot_hex = {getattr(spec.colors, k): getattr(spec.color_hex, k) for k in ("body", "pocket", "grip", "compartment")}
     objects = {k: ObjectSpec.model_validate_json(v) for k, v in objects_json.items()}
     res = build_insert(spec, objects)
     name = "einlage"
@@ -30,12 +32,16 @@ def build_insert_job(out_dir: str, insert_json: str, objects_json: dict[str, str
         "3mf_plain": write_plain_3mf(res.parts, out / f"{name}_einfach.3mf", spec.name),
         "stl": export_stl(res.body, out / f"{name}.stl"),
         "parts_zip": write_parts_zip(res.parts, out / f"{name}_teile.zip"),
-        "glb": export_glb(res.parts, out / f"{name}.glb"),
+        "glb": export_glb(res.parts, out / f"{name}.glb", slot_hex),
     }
     asm = cq.Assembly(name=spec.name)
     palette = [(0.8, 0.8, 0.82), (0.9, 0.47, 0.12), (0.24, 0.5, 0.86), (0.35, 0.67, 0.35), (0.75, 0.27, 0.27)]
     for p in res.parts:
-        c = palette[(p.slot - 1) % len(palette)]
+        if p.slot in slot_hex:
+            h = slot_hex[p.slot].lstrip("#")
+            c = tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        else:
+            c = palette[(p.slot - 1) % len(palette)]
         asm.add(p.shape, name=p.name, color=cq.Color(*c))
     files["step"] = export_step(asm, out / f"{name}.step")
     if res.layout.pieces:

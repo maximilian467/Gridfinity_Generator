@@ -211,7 +211,21 @@ def insert_created(spec: InsertSpec) -> str:
     return datetime.fromtimestamp(t, timezone.utc).isoformat()
 
 
+def slots_from_colors(spec: InsertSpec) -> InsertSpec:
+    """Filament-Slots folgen den gewählten Farben: gleiche Farbe = gleicher Slot (Körper zuerst)."""
+    order: list[str] = []
+    out = {}
+    for k in ("body", "pocket", "grip", "compartment"):
+        h = getattr(spec.color_hex, k).lower()
+        if h not in order:
+            order.append(h)
+        out[k] = order.index(h) + 1
+    spec.colors = spec.colors.model_copy(update=out)
+    return spec
+
+
 def save_insert(spec: InsertSpec) -> None:
+    slots_from_colors(spec)
     d = insert_dir(spec.id)
     d.mkdir(parents=True, exist_ok=True)
     (d / "insert.json").write_text(spec.model_dump_json(indent=1), encoding="utf-8")

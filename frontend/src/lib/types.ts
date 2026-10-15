@@ -41,6 +41,7 @@ export interface ObjectSpec {
   calipers: Record<string, number>
   warnings: string[]
   photos: Record<string, PhotoMeta>
+  project_id?: string | null
 }
 
 export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
@@ -84,6 +85,9 @@ export interface InsertSpec {
   compartments: Compartment[]
   colors: { body: number; pocket: number; grip: number; compartment: number }
   color_skin: { floor: number; wall: number; show_top_ring: boolean }
+  color_hex: PartColors
+  project_id?: string | null
+  overrides: string[]
 }
 
 export interface PolyOut { exterior: [number, number][]; holes: [number, number][][] }
@@ -122,3 +126,37 @@ export interface AdminUser {
   objects: number; inserts: number
 }
 export interface AuditEntry { ts: string; actor: string; action: string; target: string; ip: string }
+
+export interface PartColors { body: string; pocket: string; grip: string; compartment: string }
+
+/** Felder, die die Projektvorlage vorgibt (Spiegel: backend schemas.TEMPLATE_FIELDS) */
+export const TEMPLATE_FIELDS = ['height_mm', 'sink', 'stacking_lip', 'magnets', 'clearance_xy', 'clearance_end', 'clearance_z',
+  'floor_min', 'min_wall', 'smooth_mm', 'auto_grip', 'grip_width', 'grip_overhang', 'grip_depth_below', 'comp_min_size',
+  'comp_wall', 'comp_depth', 'comp_follow', 'color_hex', 'color_skin'] as const
+export type TemplateField = typeof TEMPLATE_FIELDS[number]
+export type InsertTemplate = Pick<InsertSpec, TemplateField>
+
+export const FIELD_LABELS: Record<TemplateField, string> = {
+  height_mm: 'Gesamthöhe', sink: 'Einsinktiefe', stacking_lip: 'Stapelrand', magnets: 'Magnetlöcher',
+  clearance_xy: 'Spiel seitlich', clearance_end: 'Zusatzspiel an den Enden', clearance_z: 'Abstand Boden zu Werkzeug',
+  floor_min: 'Min. Material unter Boden', min_wall: 'Min. Wand', smooth_mm: 'Kontur glätten', auto_grip: 'Greifmulde automatisch',
+  grip_width: 'Greifmulde Breite', grip_overhang: 'Greifmulde Überstand', grip_depth_below: 'Greifmulde Tiefe',
+  comp_min_size: 'Kasten Mindestgröße', comp_wall: 'Kasten Wandstärke', comp_depth: 'Kasten Tiefe', comp_follow: 'Kastenwand folgt Kontur',
+  color_hex: 'Farben', color_skin: 'Farbhaut',
+}
+
+export interface DrawerPlacement { insert_id: string; ix: number; iy: number; rot: 0 | 90 }
+export interface ProjectSpec {
+  id: string; name: string; owner_id?: number | null; created_at: string
+  drawer: BaseplateSpec; drawer_h: number | null; template: InsertTemplate; placements: DrawerPlacement[]; notes: string
+}
+export interface CloneTool {
+  object_id: string; name: string; contour: [number, number][]; s: number[]; bottom: number[]; top: number[]
+  z_rest: number; x: number; y: number; rot_deg: number; has_texture: boolean
+}
+export interface CloneInsert {
+  id: string; name: string; colors: PartColors; overrides: string[]; placed: DrawerPlacement | null; error: string | null
+  gx?: number; gy?: number; total_height?: number; layout?: LayoutOut; tools?: CloneTool[]; cut_union?: PolyOut[]
+}
+export interface CloneData { plan: PlatePlan; pitch: number; inserts: CloneInsert[]; warnings: string[]; heights_equal: boolean }
+export interface TextureInfo { url: string; x0: number; x1: number; y0: number; y1: number }
