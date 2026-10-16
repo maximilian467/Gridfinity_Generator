@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { Group, Layer, Line, Rect, Shape, Stage, Text } from 'react-konva'
 import { alpha, useTokens } from '../../lib/theme'
 import type { InsertSpec, LayoutOut, ObjectSpec, PolyOut } from '../../lib/types'
+import { useStableWidth } from '../../lib/stableWidth'
 
 export type Sel = { kind: 'placement' | 'grip' | 'comp'; index: number } | null
 /** Zeichenwerkzeug: Kasten aufziehen oder gerader Schnitt durch einen Kasten */
@@ -61,13 +62,7 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   const strokeRef = useRef<[number, number][] | null>(null)                      // sofort aktuell (schnelle Ereignisse)
   const setStroke = (v: [number, number][] | null) => { strokeRef.current = v; setStrokeState(v) }
   const [hoverP, setHoverP] = useState<[number, number] | null>(null)
-  const wrap = useRef<HTMLDivElement>(null)
-  const [w, setW] = useState(800)
-  useEffect(() => {
-    const ro = new ResizeObserver(() => wrap.current && setW(wrap.current.clientWidth))
-    if (wrap.current) ro.observe(wrap.current)
-    return () => ro.disconnect()
-  }, [])
+  const [wrap, w] = useStableWidth<HTMLDivElement>(800)      // Höhe hängt von der Breite ab: ohne Zittern durch die Scrollleiste
   const [OX, OY] = layout?.outer ?? [41.5, 41.5]
   const [sx, sy] = layout?.shift ?? [0, 0]
   // hochkant liegende Einlagen nicht höher als ~70 % des Fensters

@@ -54,6 +54,9 @@
 }
 
 html, body, #root { height: 100%; }
+/* Platz der Scrollleiste immer freihalten: sonst ändert ihr Erscheinen die Breite und Zeichenflächen,
+   deren Höhe von der Breite abhängt, schaukeln sich auf (Zittern im Bearbeitungsfenster) */
+html { scrollbar-gutter: stable; }
 body {
   margin: 0;
   background: var(--paper);

@@ -15,3 +15,4 @@ Verbindlicher Plan: `docs/PLAN.md`. Phase für Phase arbeiten; nach jeder Phase 
 - Backend-Tests: `cd backend; uv run pytest`
 - Dev: `scripts/dev.ps1` (wählt freie Ports ab 8003/5183 selbst; Proxy /api)
 - Frontend-Build: `cd frontend; npm run build` (FastAPI liefert `frontend/dist` aus)
+- Frontend-Tests: `cd frontend; npm test` (Vitest, z. B. `src/lib/stableWidth.test.ts`)

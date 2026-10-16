@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Circle, Image as KImage, Layer, Line, Stage } from 'react-konva'
 import type { PhotoMeta } from '../../lib/types'
+import { useStableWidth } from '../../lib/stableWidth'
 
 function useImage(url?: string) {
   const [img, setImg] = useState<HTMLImageElement | null>(null)
@@ -19,19 +20,13 @@ export function CornerEditor({ photo, onChange, busy }: {
   photo: PhotoMeta; onChange: (corners: number[][]) => void; busy: boolean
 }) {
   const img = useImage(photo.preview_url)
-  const wrap = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(900)
+  const [wrap, width] = useStableWidth<HTMLDivElement>(900, 1100)
   const k = photo.preview_scale
   const [pts, setPts] = useState<number[][]>(photo.corners_px.map((p) => [p[0] * k, p[1] * k]))
   const [active, setActive] = useState<number | null>(null)
   const loupe = useRef<HTMLDivElement>(null)
 
   useEffect(() => { setPts(photo.corners_px.map((p) => [p[0] * k, p[1] * k])) }, [photo.corners_px, k])
-  useEffect(() => {
-    const ro = new ResizeObserver(() => wrap.current && setWidth(Math.min(1100, wrap.current.clientWidth)))
-    if (wrap.current) ro.observe(wrap.current)
-    return () => ro.disconnect()
-  }, [])
 
   const natW = img?.naturalWidth ?? photo.size[0] * k
   const natH = img?.naturalHeight ?? photo.size[1] * k
