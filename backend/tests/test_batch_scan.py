@@ -51,6 +51,7 @@ def test_batch_scan_creates_arranged_inserts_and_keeps_failures_unfinished():
         j = client.get(f"/api/jobs/{job_id}").json()
         if j["items"] and any(it["status"] == "running" for it in j["items"]):
             seen_running = True
+            assert all(it["name"] for it in j["items"])                                  # Namen von Anfang an
         if j["status"] != "running":
             break
         assert time.time() - t0 < 400
@@ -61,7 +62,7 @@ def test_batch_scan_creates_arranged_inserts_and_keeps_failures_unfinished():
     assert items[good["id"]]["status"] == "done" and not items[good["id"]]["warnings"]
     assert items[good["id"]]["length_mm"] == pytest.approx(L, abs=0.6)
     assert items[bad_a4["id"]]["status"] == "error" and "A4" in items[bad_a4["id"]]["error"]
-    assert items[bad_tool["id"]]["status"] == "error" and "Kein Werkzeug" in items[bad_tool["id"]]["error"]
+    assert items[bad_tool["id"]]["status"] == "error" and "Draufsicht: Kein Werkzeug" in items[bad_tool["id"]]["error"]
     assert j["checks"]["done"] == 1 and j["checks"]["failed"] == 2
     assert len(j["checks"]["generate"]["created"]) == 1 and not j["checks"]["generate"]["left_out"]
 
@@ -75,10 +76,10 @@ def test_batch_scan_creates_arranged_inserts_and_keeps_failures_unfinished():
 
     # fehlgeschlagene Werkzeuge bleiben unfertig, aber im Scan-Assistenten bearbeitbar
     b = client.get(f"/api/objects/{bad_a4['id']}").json()
-    assert b["profile"] is None and b["photos"]["top"]["rectified_url"] and not b["photos"]["side"]["corners_found"]
-    assert len(b["photos"]["side"]["corners_px"]) == 4 and b["photos"]["side"]["rectified_url"]
+    assert b["profile"] is None and b["photos"]["top"]["mask_url"] and not b["photos"]["side"]["corners_found"]
+    assert len(b["photos"]["side"]["corners_px"]) == 4 and "rectified_url" not in b["photos"]["side"]   # Schritt offen
     e = client.get(f"/api/objects/{bad_tool['id']}").json()
-    assert e["profile"] is None and e["photos"]["top"]["corners_found"]
+    assert e["profile"] is None and e["photos"]["top"]["corners_found"] and e["photos"]["side"]["mask_url"]
     # Nacharbeit im Assistenten: Ecken der Seitenansicht setzen, freistellen, Profil -> fertig
     side_ok = client.post(f"/api/objects/{bad_a4['id']}/photos/side",
                           files={"file": ("s.jpg", jpg(side), "image/jpeg")}).json()

@@ -78,7 +78,13 @@ def batch_scan_job(out_dir: str, pid: str, object_ids: list[str], user) -> dict:
     from . import jobs, scan, storage
     from .api.projects import GenerateBody, generate
 
-    items = [{"id": oid, "name": "", "status": "wait", "step": None, "error": None, "warnings": []}
+    def name(oid: str) -> str:
+        try:
+            return storage.load_object(oid, user).name
+        except KeyError:
+            return ""
+
+    items = [{"id": oid, "name": name(oid), "status": "wait", "step": None, "error": None, "warnings": []}
              for oid in object_ids]
     n = len(items)
 
@@ -89,22 +95,29 @@ def batch_scan_job(out_dir: str, pid: str, object_ids: list[str], user) -> dict:
         it["status"] = "running"
         try:
             spec = storage.load_object(it["id"], user)
-            it["name"] = spec.name
             it["step"] = "a4"
             report(k)
+            errors, views = [], []
             for view in ("top", "side"):
                 bgr, f35, _ = scan.load(spec, view)
-                found = scan.detect_corners(spec, view, bgr, f35)
+                if scan.detect_corners(spec, view, bgr, f35):
+                    views.append(view)
+                else:                                       # Schritt bleibt im Scan-Assistenten offen
+                    spec.photos[view].pop("rectified_url", None)
+                    errors.append(f"A4-Blatt in der {scan.VIEW_NAMES[view]} nicht gefunden.")
                 storage.save_object(spec)
-                if not found:
-                    raise scan.ScanError(f"A4-Blatt in der {scan.VIEW_NAMES[view]} nicht gefunden. "
-                                         "Im Scan-Assistenten die Ecken setzen.")
-            for j, view in enumerate(("top", "side")):     # Draufsicht zuerst: Rückfallebene der Handentfernung
+            for view in views:                              # Draufsicht zuerst: Rückfallebene der Handentfernung
                 it["step"] = view
-                report(k + 0.2 + 0.3 * j)
-                info = scan.segment_view(spec, view)
+                report(k + (0.2 if view == "top" else 0.5))
+                try:
+                    info = scan.segment_view(spec, view)
+                except scan.ScanError as e:
+                    errors.append(f"{scan.VIEW_NAMES[view]}: {e}")
+                    continue
                 if view == "top" and info.get("touches_paper_edge"):
                     it["warnings"].append("Das Werkzeug reicht in der Draufsicht bis an den Blattrand.")
+            if errors:
+                raise scan.ScanError(" ".join(errors) + " Im Scan-Assistenten nachbearbeiten.")
             it["step"] = "profile"
             report(k + 0.85)
             scan.compute_profile(spec)
