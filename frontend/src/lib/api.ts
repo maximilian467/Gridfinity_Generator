@@ -76,11 +76,12 @@ export const api = {
   compartmentAt: (spec: InsertSpec, x: number, y: number) =>
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/at`, json('POST', { spec, x, y })),
 
-  projects: (all = false) => req<ProjectSpec[]>(all ? '/projects?all=true' : '/projects'),
+  projects: (all = false, archived = false) => req<ProjectSpec[]>(`/projects?all=${all}&archived=${archived}`),
   project: (id: string) => req<ProjectSpec>(`/projects/${id}`),
   createProject: (name: string, drawer_x: number, drawer_y: number) => req<ProjectSpec>('/projects', json('POST', { name, drawer_x, drawer_y })),
   saveProject: (p: ProjectSpec) => req<ProjectSpec>(`/projects/${p.id}`, json('PUT', p)),
-  deleteProject: (id: string) => req(`/projects/${id}`, json('DELETE')),
+  archiveProject: (id: string) => req(`/projects/${id}`, json('DELETE')),
+  restoreProject: (id: string) => req<ProjectSpec>(`/projects/${id}/restore`, json('POST')),
   assign: (pid: string, kind: 'insert' | 'object', id: string, member = true) => req(`/projects/${pid}/assign`, json('POST', { kind, id, member })),
   generate: (pid: string, object_ids: string[] | null = null, arrange = true) =>
     req<{ created: string[]; skipped: string[]; already?: string[]; placed?: string[]; left_out?: string[]; left_out_names?: string[]; unfinished_names?: string[] }>(`/projects/${pid}/generate`, json('POST', { object_ids, arrange })),

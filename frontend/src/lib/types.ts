@@ -149,6 +149,7 @@ export interface DrawerPlacement { insert_id: string; ix: number; iy: number; ro
 export interface ProjectSpec {
   id: string; name: string; owner_id?: number | null; created_at: string
   drawer: BaseplateSpec; drawer_h: number | null; template: InsertTemplate; placements: DrawerPlacement[]; notes: string
+  archived?: boolean; archived_at?: string
 }
 export interface CloneTool {
   object_id: string; name: string; contour: [number, number][]; s: number[]; bottom: number[]; top: number[]

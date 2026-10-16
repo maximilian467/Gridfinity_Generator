@@ -52,8 +52,9 @@ def apply_template(p: ProjectSpec, ins: InsertSpec) -> InsertSpec:
 
 
 @router.get("", response_model=list[ProjectSpec])
-def list_(all: bool = False, user: Principal = Depends(current_user)) -> list[ProjectSpec]:
-    return storage.list_projects(user, all_=all)
+def list_(all: bool = False, archived: bool = False, user: Principal = Depends(current_user)) -> list[ProjectSpec]:
+    """Aktive Projekte; mit archived=true nur die archivierten."""
+    return [p for p in storage.list_projects(user, all_=all) if p.archived == archived]
 
 
 class NewProject(BaseModel):
@@ -80,7 +81,8 @@ def get(pid: str, user: Principal = Depends(current_user)) -> ProjectSpec:
 @router.put("/{pid}", response_model=ProjectSpec)
 def put(pid: str, spec: ProjectSpec, user: Principal = Depends(current_user)) -> ProjectSpec:
     old = _get(pid, user)
-    spec = spec.model_copy(update={"id": pid, "owner_id": old.owner_id, "created_at": old.created_at})
+    spec = spec.model_copy(update={"id": pid, "owner_id": old.owner_id, "created_at": old.created_at,
+                                   "archived": old.archived, "archived_at": old.archived_at})
     storage.save_project(spec)
     if spec.template != old.template:          # Vorlage geändert: an alle Einlagen weitergeben
         for ins in project_inserts(spec):
@@ -92,16 +94,21 @@ def put(pid: str, spec: ProjectSpec, user: Principal = Depends(current_user)) ->
 
 @router.delete("/{pid}")
 def delete(pid: str, user: Principal = Depends(current_user)) -> dict:
-    """Löscht nur das Projekt; Einlagen und Werkzeuge bleiben (ohne Projekt) erhalten."""
+    """Löschen = archivieren: das Projekt verschwindet aus der Liste, alle Daten (Schublade, Einlagen,
+    Werkzeuge) bleiben erhalten und lassen sich wiederherstellen. Endgültig löschen: storage.delete_project."""
+    from datetime import datetime, timezone
     p = _get(pid, user)
-    for ins in project_inserts(p):
-        storage.save_insert(ins.model_copy(update={"project_id": None, "overrides": []}))
-    for o in storage.list_objects(user, all_=True):
-        if o.project_id == pid:
-            o.project_id = None
-            storage.save_object(o)
-    storage.delete_project(pid)
-    return {"ok": True}
+    p.archived, p.archived_at = True, datetime.now(timezone.utc).isoformat()
+    storage.save_project(p)
+    return {"ok": True, "archived": True}
+
+
+@router.post("/{pid}/restore", response_model=ProjectSpec)
+def restore(pid: str, user: Principal = Depends(current_user)) -> ProjectSpec:
+    p = _get(pid, user)
+    p.archived, p.archived_at = False, ""
+    storage.save_project(p)
+    return p
 
 
 class AssignBody(BaseModel):

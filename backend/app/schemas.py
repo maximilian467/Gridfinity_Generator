@@ -204,3 +204,5 @@ class ProjectSpec(BaseModel):
     template: InsertTemplate = Field(default_factory=InsertTemplate)
     placements: Annotated[list[DrawerPlacement], Field(max_length=200)] = []
     notes: str = Field("", max_length=2000)
+    archived: bool = False                # "Löschen" archiviert nur (Daten bleiben, solange Platz kein Problem ist)
+    archived_at: str = Field("", max_length=40)

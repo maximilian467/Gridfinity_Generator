@@ -45,7 +45,8 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
     return () => clearTimeout(t)
   }, [p.name, p.drawer, p.template, p.drawer_h, p.notes]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const del = useMutation({ mutationFn: () => api.deleteProject(p.id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); nav('/?view=projects') } })
+  const del = useMutation({ mutationFn: () => api.archiveProject(p.id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); nav('/?view=projects') } })
+  const restore = useMutation({ mutationFn: () => api.restoreProject(p.id), onSuccess: (r) => { patch({ archived: r.archived }); qc.invalidateQueries({ queryKey: ['projects'] }) } })
   const data = clone.data
   const placed = data?.inserts.filter((i) => i.placed).length ?? 0
 
@@ -68,6 +69,8 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
           { value: 'drawer', label: 'Schublade' }, { value: 'tools', label: 'Werkzeuge & Einlagen' },
           { value: 'template', label: 'Vorlage' }, { value: 'plate', label: 'Baseplate' }]} />
       </header>
+      {p.archived && <Msg kind="info">Dieses Projekt ist archiviert und erscheint nicht in der Projektliste.
+        <button className="btn btn-sm ml-2" onClick={() => restore.mutate()}>Aus dem Archiv holen</button></Msg>}
       {clone.isError && <Msg kind="err">{errText(clone.error)}</Msg>}
       {data?.warnings.map((w) => <Msg key={w} kind="warn">{w}</Msg>)}
 
@@ -88,8 +91,10 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
       {tab === 'plate' && <PlateTab p={p} patch={patch} />}
 
       <div className="flex justify-end">
-        <button className="btn btn-sm btn-quiet" onClick={() => confirm(`Projekt "${p.name}" löschen? Einlagen und Werkzeuge bleiben erhalten.`) && del.mutate()}>
-          <Trash size={14} /> Projekt löschen</button>
+        {p.archived
+          ? <button className="btn btn-sm" onClick={() => restore.mutate()}><ArrowClockwise size={14} /> Aus dem Archiv holen</button>
+          : <button className="btn btn-sm btn-quiet" onClick={() => confirm(`Projekt "${p.name}" löschen? Es wird archiviert: Schublade, Einlagen und Werkzeuge bleiben erhalten und lassen sich wiederherstellen.`) && del.mutate()}>
+            <Trash size={14} /> Projekt löschen (archivieren)</button>}
       </div>
     </div>
   )

@@ -77,9 +77,14 @@ def test_place_checks_space_and_delete_keeps_inserts():
     proj["drawer"]["disabled"] = [[qa["ix"], qa["iy"]]]
     client.put(f"/api/projects/{pid}", json=proj)
     assert any("abgewählten" in w for w in client.get(f"/api/projects/{pid}/clone").json()["warnings"])
-    assert client.delete(f"/api/projects/{pid}").status_code == 200
-    assert client.get(f"/api/inserts/{a}").json()["project_id"] is None
-    assert client.get(f"/api/projects/{pid}").status_code == 404
+    # Löschen archiviert nur: nicht mehr in der Liste, Daten bleiben, wiederherstellbar
+    assert client.delete(f"/api/projects/{pid}").json()["archived"]
+    assert pid not in [q["id"] for q in client.get("/api/projects").json()]
+    assert pid in [q["id"] for q in client.get("/api/projects?archived=true").json()]
+    assert client.get(f"/api/inserts/{a}").json()["project_id"] == pid
+    assert client.get(f"/api/projects/{pid}").json()["archived"]
+    client.post(f"/api/projects/{pid}/restore")
+    assert pid in [q["id"] for q in client.get("/api/projects").json()]
 
 
 def test_insert_created_in_project_uses_template():

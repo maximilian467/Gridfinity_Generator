@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Copy, Cube, FolderSimple, Plus, Scan, Trash } from '@phosphor-icons/react'
+import { Archive, Copy, Cube, FolderSimple, Plus, Scan, Trash } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import { Check, Empty, Msg, NumberField, Segmented, Silhouette, errText } from '../../components/ui'
 import type { ProjectSpec } from '../../lib/types'
@@ -9,9 +9,13 @@ import type { ProjectSpec } from '../../lib/types'
 function Projects({ showAll }: { showAll: boolean }) {
   const nav = useNavigate()
   const qc = useQueryClient()
-  const projects = useQuery({ queryKey: ['projects', showAll ? 'all' : 'mine'], queryFn: () => api.projects(showAll) })
+  const [archive, setArchive] = useState(false)
+  const projects = useQuery({ queryKey: ['projects', showAll ? 'all' : 'mine', archive ? 'archived' : 'active'], queryFn: () => api.projects(showAll, archive) })
   const inserts = useQuery({ queryKey: ['inserts', showAll ? 'all' : 'mine'], queryFn: () => api.inserts(showAll) })
   const objects = useQuery({ queryKey: ['objects', showAll ? 'all' : 'mine'], queryFn: () => api.objects(showAll) })
+  const refresh = () => qc.invalidateQueries({ queryKey: ['projects'] })
+  const archiveP = useMutation({ mutationFn: api.archiveProject, onSuccess: refresh })
+  const restoreP = useMutation({ mutationFn: api.restoreProject, onSuccess: refresh })
   const [form, setForm] = useState<{ name: string; x: number; y: number } | null>(null)
   const create = useMutation({
     mutationFn: () => api.createProject(form!.name, form!.x, form!.y),
@@ -24,8 +28,11 @@ function Projects({ showAll }: { showAll: boolean }) {
   return (
     <section className="grid gap-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-xl font-semibold tracking-tight">Projekte</h1>
-        <button className="btn btn-primary" onClick={() => setForm({ name: 'Schublade', x: 500, y: 350 })}><Plus size={16} /> Neues Projekt</button>
+        <h1 className="text-xl font-semibold tracking-tight">{archive ? 'Archivierte Projekte' : 'Projekte'}</h1>
+        <div className="flex gap-2">
+          <button className={`btn ${archive ? 'btn-on' : ''}`} onClick={() => setArchive((v) => !v)}><Archive size={16} /> {archive ? 'Zurück zu den Projekten' : 'Archiv'}</button>
+          {!archive && <button className="btn btn-primary" onClick={() => setForm({ name: 'Schublade', x: 500, y: 350 })}><Plus size={16} /> Neues Projekt</button>}
+        </div>
       </div>
       {form && (
         <div className="panel p-3 grid gap-2 md:grid-cols-[1fr_140px_140px_auto] items-end">
@@ -41,17 +48,24 @@ function Projects({ showAll }: { showAll: boolean }) {
         </div>
       )}
       {projects.isPending ? <div className="skeleton h-28" /> : !projects.data?.length ? (
+        archive ? <Empty title="Archiv ist leer">Gelöschte Projekte landen hier und lassen sich wiederherstellen.</Empty> :
         <Empty title="Noch keine Projekte">Ein Projekt ist eine Schublade: Baseplate nach Maß, alle Werkzeuge mit ihren Einlagen und ein digitaler Klon in 3D.</Empty>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {projects.data.map((p) => {
             const c = count(p)
             return (
-              <button key={p.id} className="panel p-4 grid gap-1 text-left cursor-pointer" style={{ color: 'var(--ink)', font: 'inherit' }} onClick={() => nav(`/project/${p.id}`)}>
-                <span className="inline-flex items-center gap-2 font-semibold"><FolderSimple size={18} color="var(--accent)" /> {p.name}</span>
-                <span className="num text-sm" style={{ color: 'var(--ink-2)' }}>{p.drawer.drawer_x} x {p.drawer.drawer_y} mm · {c.obj} Werkzeuge · {c.ins} Einlagen</span>
-                <span className="num text-xs" style={{ color: 'var(--ink-3)' }}>{p.template.height_mm ? `alle ${p.template.height_mm} mm hoch` : 'Höhe automatisch'}</span>
-              </button>
+              <div key={p.id} className="panel p-4 flex gap-2 items-start">
+                <button className="grid gap-1 text-left cursor-pointer flex-1 min-w-0 bg-transparent border-0 p-0" style={{ color: 'var(--ink)', font: 'inherit' }} onClick={() => nav(`/project/${p.id}`)}>
+                  <span className="inline-flex items-center gap-2 font-semibold"><FolderSimple size={18} color="var(--accent)" /> <span className="truncate">{p.name}</span></span>
+                  <span className="num text-sm" style={{ color: 'var(--ink-2)' }}>{p.drawer.drawer_x} x {p.drawer.drawer_y} mm · {c.obj} Werkzeuge · {c.ins} Einlagen</span>
+                  <span className="num text-xs" style={{ color: 'var(--ink-3)' }}>{archive && p.archived_at ? `archiviert am ${new Date(p.archived_at).toLocaleDateString('de-DE')}` : p.template.height_mm ? `alle ${p.template.height_mm} mm hoch` : 'Höhe automatisch'}</span>
+                </button>
+                {archive
+                  ? <button className="btn btn-sm" onClick={() => restoreP.mutate(p.id)} disabled={restoreP.isPending}>Wiederherstellen</button>
+                  : <button className="btn btn-sm btn-quiet" aria-label={`${p.name} löschen`} title="Löschen (wird archiviert, wiederherstellbar)"
+                    onClick={() => confirm(`Projekt "${p.name}" löschen? Es wird archiviert und lässt sich wiederherstellen.`) && archiveP.mutate(p.id)}><Trash size={14} /></button>}
+              </div>
             )
           })}
         </div>
