@@ -6,12 +6,13 @@ Vorlage, übernehmen alle Einlagen die neuen Werte, außer den Feldern, die eine
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from .. import storage
+from .. import build_tasks, jobs, scan, storage
 from ..auth import Principal, current_user
 from ..geometry.baseplate import plan_info, plan_plate
 from ..geometry.gridfinity import PITCH
@@ -19,6 +20,7 @@ from ..geometry.layout import compute_layout
 from ..geometry.packing import Item, fits, pack
 from ..schemas import TEMPLATE_FIELDS, DrawerPlacement, InsertSpec, Placement, ProjectSpec
 from .inserts import layout_payload, standard_height
+from .objects import MAX_PHOTO_BYTES, PHOTO_TYPES, _read_limited
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -333,3 +335,53 @@ def place(pid: str, body: PlaceBody, user: Principal = Depends(current_user)) ->
     p.placements = others
     storage.save_project(p)
     return {"ok": True, "placements": [q.model_dump() for q in p.placements]}
+
+
+# ---- Stapel-Scan: viele Werkzeuge auf einmal (je Paar Draufsicht + Seitenansicht) ----------------
+MAX_BATCH = 60
+
+
+@router.post("/{pid}/scan-pair")
+async def scan_pair(pid: str, top: UploadFile = File(...), side: UploadFile = File(...),
+                    name: str = Form("", max_length=120), user: Principal = Depends(current_user)) -> dict:
+    """Ein Fotopaar ablegen: legt das Werkzeug im Projekt an, ausgewertet wird später im Stapel-Scan."""
+    _get(pid, user)
+    files = {}
+    for view, f in (("top", top), ("side", side)):
+        ext = Path(f.filename or "x.jpg").suffix.lower() or ".jpg"
+        if ext not in PHOTO_TYPES:
+            raise HTTPException(415, "Bitte Fotos als JPG, PNG oder WebP hochladen")
+        files[view] = (await _read_limited(f, MAX_PHOTO_BYTES), ext)
+    n = sum(1 for o in storage.list_objects(user) if o.project_id == pid)
+    obj = storage.create_object(name.strip() or f"Werkzeug {n + 1}", user)
+    obj.project_id = pid
+    try:
+        for view, (data, ext) in files.items():
+            scan.store_photo(obj, view, data, ext)
+    except scan.ScanError as e:
+        storage.delete_object(obj.id)
+        raise HTTPException(e.status, f"{scan.VIEW_NAMES[view]}: {e}") from None
+    storage.save_object(obj)
+    return {"id": obj.id, "name": obj.name}
+
+
+class BatchBody(BaseModel):
+    object_ids: list[str] = Field(min_length=1, max_length=MAX_BATCH)
+
+
+@router.post("/{pid}/batch-scan")
+def batch_scan(pid: str, body: BatchBody, user: Principal = Depends(current_user)) -> dict:
+    """Hintergrund-Job: alle Paare auswerten, dann Einlagen nach der Vorlage erzeugen und anordnen."""
+    _get(pid, user)
+    for oid in body.object_ids:
+        try:
+            o = storage.load_object(oid, user)
+        except KeyError:
+            raise HTTPException(404, "Werkzeug nicht gefunden") from None
+        if o.project_id != pid:
+            raise HTTPException(422, f"{o.name} gehört nicht zu diesem Projekt")
+        if not ("top" in o.photos and "side" in o.photos):
+            raise HTTPException(409, f"{o.name}: Draufsicht oder Seitenansicht fehlt")
+    job_id = jobs.submit("scan", build_tasks.batch_scan_job, storage.project_dir(pid) / "scans", pid,
+                         list(dict.fromkeys(body.object_ids)), user, owner=user)
+    return {"job_id": job_id}

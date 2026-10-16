@@ -64,3 +64,69 @@ def build_baseplate_job(out_dir: str, spec_json: str) -> dict:
     spec = BaseplateSpec.model_validate_json(spec_json)
     files, info = build_baseplate_files(spec, out)
     return {"outputs": {k: url_for(v) for k, v in files.items()}, "checks": info, "warnings": info.get("warnings", [])}
+
+
+SCAN_STEPS = {"a4": "A4-Blatt suchen", "top": "Draufsicht freistellen", "side": "Seitenansicht freistellen",
+              "profile": "Profil berechnen"}
+
+
+def batch_scan_job(out_dir: str, pid: str, object_ids: list[str], user) -> dict:
+    """Stapel-Scan im Projekt: je Werkzeug A4-Blatt, Freistellen beider Ansichten (Hand weg), Profil;
+    danach Einlagen nach der Projektvorlage für alle fertigen Werkzeuge und Anordnung in der Schublade.
+    Ein Fehler betrifft nur sein Werkzeug: es bleibt unfertig und lässt sich im Scan-Assistenten
+    nachbearbeiten."""
+    from . import jobs, scan, storage
+    from .api.projects import GenerateBody, generate
+
+    items = [{"id": oid, "name": "", "status": "wait", "step": None, "error": None, "warnings": []}
+             for oid in object_ids]
+    n = len(items)
+
+    def report(k: float) -> None:
+        jobs.report(out_dir, progress=0.02 + 0.93 * k / (n + 0.5), items=items)
+
+    for k, it in enumerate(items):
+        it["status"] = "running"
+        try:
+            spec = storage.load_object(it["id"], user)
+            it["name"] = spec.name
+            it["step"] = "a4"
+            report(k)
+            for view in ("top", "side"):
+                bgr, f35, _ = scan.load(spec, view)
+                found = scan.detect_corners(spec, view, bgr, f35)
+                storage.save_object(spec)
+                if not found:
+                    raise scan.ScanError(f"A4-Blatt in der {scan.VIEW_NAMES[view]} nicht gefunden. "
+                                         "Im Scan-Assistenten die Ecken setzen.")
+            for j, view in enumerate(("top", "side")):     # Draufsicht zuerst: Rückfallebene der Handentfernung
+                it["step"] = view
+                report(k + 0.2 + 0.3 * j)
+                info = scan.segment_view(spec, view)
+                if view == "top" and info.get("touches_paper_edge"):
+                    it["warnings"].append("Das Werkzeug reicht in der Draufsicht bis an den Blattrand.")
+            it["step"] = "profile"
+            report(k + 0.85)
+            scan.compute_profile(spec)
+            T = max(spec.profile.top) if spec.profile and spec.profile.top else 0.0
+            if spec.width_mm and T > 1.3 * spec.width_mm:
+                it["warnings"].append("Dicker als breit: Draufsicht und Seitenansicht vertauscht?")
+            it.update(status="done", step=None, length_mm=spec.length_mm, width_mm=spec.width_mm)
+        except scan.ScanError as e:
+            it.update(status="error", error=str(e))
+        except KeyError:
+            it.update(status="error", error="Werkzeug nicht gefunden (gelöscht?)")
+        except Exception as e:  # noqa: BLE001 - ein Werkzeug darf den Stapel nicht abbrechen
+            it.update(status="error", error=f"Automatische Auswertung fehlgeschlagen ({type(e).__name__}: {e}). "
+                                            "Im Scan-Assistenten nachbearbeiten.")
+        report(k + 1)
+    ok = [it["id"] for it in items if it["status"] == "done"]
+    res: dict = {"created": [], "skipped": [], "already": []}
+    warnings: list[str] = []
+    if ok:
+        try:
+            res = generate(pid, GenerateBody(object_ids=ok, arrange=True), user)
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"Einlagen konnten nicht erzeugt werden: {getattr(e, 'detail', e)}")
+    return {"outputs": {}, "items": items, "warnings": warnings,
+            "checks": {"done": len(ok), "failed": n - len(ok), "generate": res}}
