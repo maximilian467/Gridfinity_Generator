@@ -104,6 +104,14 @@ export interface LayoutOut {
 export interface Job {
   id: string; kind: string; status: 'running' | 'done' | 'error'; progress: number
   outputs: Record<string, string>; checks: Record<string, any>; warnings: string[]; error: string | null
+  items?: ScanItem[] | null
+}
+
+/** Stapel-Scan: Stand je Werkzeug */
+export interface ScanItem {
+  id: string; name: string; status: 'wait' | 'running' | 'done' | 'error'
+  step: 'a4' | 'top' | 'side' | 'profile' | null; error: string | null; warnings: string[]
+  length_mm?: number; width_mm?: number
 }
 
 export interface BaseplateSpec {

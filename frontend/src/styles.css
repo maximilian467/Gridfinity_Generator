@@ -124,6 +124,13 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
 .chip-ok { border-color: var(--ok); color: var(--ok); }
 .chip-warn { border-color: var(--warn); color: var(--warn); }
 .chip-err { border-color: var(--err); color: var(--err); }
+.thumb-btn { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; border: 0; cursor: pointer;
+  background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--ink); }
+.thumb-btn:hover:not(:disabled) { background: var(--surface); outline: 1px solid var(--line-2); }
+.thumb-btn:disabled { opacity: .35; cursor: default; }
+.pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1s ease-in-out infinite alternate; }
+@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pulse-dot { animation: none; } }
 .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
 
 .stat { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }

@@ -91,6 +91,11 @@ export const api = {
   place: (pid: string, insert_id: string, placement: DrawerPlacement | null) =>
     req<{ ok: boolean; placements: DrawerPlacement[] }>(`/projects/${pid}/place`, json('POST', { insert_id, placement })),
   texture: (oid: string) => req<TextureInfo>(`/objects/${oid}/texture`),
+  scanPair: (pid: string, top: File, side: File, name: string) => {
+    const fd = new FormData(); fd.append('top', top); fd.append('side', side); fd.append('name', name)
+    return req<{ id: string; name: string }>(`/projects/${pid}/scan-pair`, { method: 'POST', body: fd })
+  },
+  batchScan: (pid: string, object_ids: string[]) => req<{ job_id: string }>(`/projects/${pid}/batch-scan`, json('POST', { object_ids })),
 
   job: (id: string) => req<Job>(`/jobs/${id}`),
   planBaseplate: (spec: BaseplateSpec) => req<PlatePlan>('/baseplates/plan', json('POST', spec)),

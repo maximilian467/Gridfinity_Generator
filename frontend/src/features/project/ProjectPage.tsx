@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, MagicWand, Plus, Rows, Scan, SignOut, Trash, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rows, Scan, SignOut, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec, TemplateField } from '../../lib/types'
 import { FIELD_LABELS } from '../../lib/types'
@@ -9,6 +9,7 @@ import { BusyBar, Check, Empty, Msg, NumberField, Segmented, Silhouette, errText
 import { PartColorsEdit } from '../../components/ColorPick'
 import { PlateBuild, PlateSettings, toggleCells, usePlatePlan } from '../baseplate/Baseplate'
 import { PITCH, PlateEditor } from '../baseplate/PlateEditor'
+import { BatchScan } from './BatchScan'
 
 const Clone3D = lazy(() => import('./Clone3D').then((m) => ({ default: m.Clone3D })))
 
@@ -347,6 +348,7 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
   })
   const assign = useMutation({ mutationFn: (v: { kind: 'insert' | 'object'; id: string; member: boolean }) => api.assign(p.id, v.kind, v.id, v.member), onSuccess: done })
   const gen = useMutation({ mutationFn: (oid: string) => api.generate(p.id, [oid], true), onSuccess: done })
+  const [batch, setBatch] = useState(() => { try { return !!sessionStorage.getItem(`batch-scan:${p.id}`) } catch { return false } })
   return (
     <div className="grid gap-6">
       <section className="grid gap-3">
@@ -359,13 +361,17 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
               {others.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
           )}
+          <button className="btn" onClick={() => setBatch(true)} disabled={batch}><Images size={16} /> Viele auf einmal</button>
           <button className="btn btn-primary" onClick={() => scan.mutate()} disabled={scan.isPending}><Scan size={16} /> Werkzeug scannen</button>
         </div>
-        {!mine.length ? <Empty title="Noch keine Werkzeuge">Werkzeug scannen oder ein vorhandenes hinzufügen. Nach dem Scan entsteht die Einlage automatisch nach der Vorlage.</Empty> : (
+        {batch && <BatchScan pid={p.id} firstNumber={mine.length + 1} onChanged={done} onClose={() => setBatch(false)} />}
+        {!mine.length ? <Empty title="Noch keine Werkzeuge">Werkzeug scannen (einzeln oder viele auf einmal) oder ein vorhandenes hinzufügen. Nach dem Scan entsteht die Einlage automatisch nach der Vorlage.</Empty> : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
             {mine.map((o) => (
               <article key={o.id} className="panel p-3 grid gap-2">
-                <Silhouette contour={o.contour_mm} className="w-full h-24" />
+                {!o.contour_mm.length && o.photos.top?.preview_url
+                  ? <img src={o.photos.top.preview_url} alt="" loading="lazy" className="w-full h-24 object-cover rounded" style={{ opacity: 0.8 }} />
+                  : <Silhouette contour={o.contour_mm} className="w-full h-24" />}
                 <div className="font-medium truncate">{o.name}</div>
                 <div className="num text-xs" style={{ color: 'var(--ink-2)' }}>{o.profile ? `${o.length_mm.toFixed(0)} x ${o.width_mm.toFixed(0)} mm` : 'noch nicht fertig gescannt'}</div>
                 {insOf(o.id).map((i) => (
