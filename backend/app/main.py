@@ -114,7 +114,7 @@ def health() -> dict[str, str]:
 
 
 @api.get("/files/{path:path}")
-def files(path: str, user: auth.Principal = Depends(auth.current_user)) -> FileResponse:
+def files(path: str, format: str | None = None, user: auth.Principal = Depends(auth.current_user)):
     root = DATA_DIR.resolve()
     f = (root / path).resolve()
     parts = f.relative_to(root).parts if root in f.parents else ()
@@ -124,6 +124,11 @@ def files(path: str, user: auth.Principal = Depends(auth.current_user)) -> FileR
     found, owner = storage.owner_of_path(parts)      # Besitzer aus object.json / insert.json / job.json
     if not found or not storage.can_access(owner, user):
         raise HTTPException(404, "Datei nicht gefunden")
+    if format == "b64" and f.suffix.lower() == ".glb":
+        # Ersatzweg für die 3D-Vorschau: manche Firmen-Proxys/Filter blockieren 3D-Dateien, JSON kommt durch
+        import base64
+        return JSONResponse({"b64": base64.b64encode(f.read_bytes()).decode("ascii")},
+                            headers={"Cache-Control": "no-cache"})
     # sandbox: falls je aktive Inhalte (SVG) dabei sind, laufen sie nicht im Kontext der App
     return FileResponse(f, headers={"Cache-Control": "no-cache", "Content-Security-Policy": "sandbox"})
 

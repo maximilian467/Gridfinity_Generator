@@ -4,6 +4,7 @@ import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { api } from '../../lib/api'
 import { Segmented } from '../../components/ui'
+import { ThreeGuard } from '../../components/ThreeGuard'
 import type { CloneData, CloneInsert, CloneTool, PolyOut, TextureInfo } from '../../lib/types'
 
 /** Digitaler Klon der Schublade: Baseplate, Einlagen (vereinfachte Geometrie aus dem Layout) und auf Wunsch
@@ -220,6 +221,7 @@ export function Clone3D({ data, height = 560 }: { data: CloneData; height?: numb
         )}
         <label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={showPlate} onChange={(e) => setShowPlate(e.target.checked)} /> Baseplate</label>
       </div>
+      <ThreeGuard height={height}>
       <div className="panel" style={{ height }}>
         <Canvas camera={{ position: [0, span * 0.9, span * 0.75], fov: 35, near: 1, far: span * 10 }}>
           <color attach="background" args={['#eceae6']} />
@@ -230,6 +232,7 @@ export function Clone3D({ data, height = 560 }: { data: CloneData; height?: numb
           <OrbitControls makeDefault />
         </Canvas>
       </div>
+      </ThreeGuard>
     </div>
   )
 }
