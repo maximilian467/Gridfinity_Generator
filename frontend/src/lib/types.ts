@@ -45,7 +45,7 @@ export interface ObjectSpec {
 }
 
 export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
-export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean; attach?: number | null; s?: number | null; auto_length?: boolean; edge_r?: number }
+export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean; attach?: number | null; s?: number | null; auto_length?: boolean; edge_r?: number; angle_deg?: number }
 export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number | null; polygon?: [number, number][] | null; generated?: boolean }
 
 export interface InsertSpec {

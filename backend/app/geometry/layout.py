@@ -192,6 +192,23 @@ def grip_across(outline, sg: float, width: float, overhang: float) -> tuple[floa
     return (lo + hi) / 2, max((hi - lo) + 2 * overhang, width)
 
 
+def grip_across_angled(outline, sg: float, yc: float, angle_deg: float, width: float,
+                       overhang: float) -> tuple[float, float, float]:
+    """Wie grip_across, aber schräg: Sehne durch (sg, yc) in Richtung quer zur Achse, um angle_deg
+    gedreht. Rückgabe Mitte (x, y) der Sehne und Länge (Sehne + 2 x Überstand)."""
+    a = math.radians(angle_deg)
+    dx, dy = -math.sin(a), math.cos(a)
+    R = 1e3
+    cut = LineString([(sg - dx * R, yc - dy * R), (sg + dx * R, yc + dy * R)]).intersection(outline)
+    if cut.is_empty:
+        return sg, yc, width
+    ts = [(x - sg) * dx + (y - yc) * dy for x, y in (cut.coords if hasattr(cut, "coords") and cut.geom_type == "LineString"
+                                                    else [c for g in getattr(cut, "geoms", []) for c in g.coords])]
+    lo, hi = min(ts), max(ts)
+    m = (lo + hi) / 2
+    return sg + dx * m, yc + dy * m, max((hi - lo) + 2 * overhang, width)
+
+
 def auto_grip_for(obj: ObjectSpec, outline, spec: InsertSpec) -> GripRecess:
     """Greifmulde quer unter dem Werkzeug am Schwerpunkt (objekt-lokale Koordinaten)."""
     sg = balance_point(obj)
@@ -290,8 +307,11 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
             outline = outlines[g.attach]
             sg = g.s if g.s is not None else balance_point(objects[pl.object_id])
             yc, L = grip_across(outline, sg, g.w, spec.grip_overhang)
-            c = _place(Point(sg, yc), pl)
-            g = g.model_copy(update={"x": c.x, "y": c.y, "rot_deg": pl.rot_deg, "s": sg,
+            cx, cy = sg, yc
+            if abs(g.angle_deg) > 1e-6:          # schräg: Länge entlang der gedrehten Richtung
+                cx, cy, L = grip_across_angled(outline, sg, yc, g.angle_deg, g.w, spec.grip_overhang)
+            c = _place(Point(cx, cy), pl)
+            g = g.model_copy(update={"x": c.x, "y": c.y, "rot_deg": pl.rot_deg + g.angle_deg, "s": sg,
                                      "l": L if g.auto_length else g.l})
         lay.grips.append(_make_grip(g, lay.pieces, zmin_all))
     need = FOOT_H + spec.floor_min

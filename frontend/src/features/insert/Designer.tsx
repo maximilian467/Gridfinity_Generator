@@ -665,7 +665,7 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
     // tatsächliche Länge der Mulde (bei automatischer Länge aus dem Layout)
     const lg = lay?.grips.filter((q) => !q.auto)[sel.index]?.polygons[0]
     const curLen = lg && pl ? (() => {
-      const a = (pl.rot_deg * Math.PI) / 180, nx = -Math.sin(a), ny = Math.cos(a)
+      const a = ((pl.rot_deg + (g.angle_deg ?? 0)) * Math.PI) / 180, nx = -Math.sin(a), ny = Math.cos(a)
       const t = lg.exterior.map(([x, y]) => x * nx + y * ny)
       return Math.max(...t) - Math.min(...t)
     })() : undefined
@@ -686,9 +686,27 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
           <NumberField label="Tiefe unter Tasche" value={g.depth_below} step={1} min={0} onChange={(v) => upd({ depth_below: v })} />
           <NumberField label="Kantenradius" value={g.edge_r ?? 1} step={0.5} min={0} max={15} onChange={(v) => upd({ edge_r: v })} />
         </div>
+        <label className="grid gap-1">
+          <span className="label mb-0">Winkel zur Werkzeugachse <span className="num">{Math.round(g.angle_deg ?? 0)}°</span>
+            <span className="hint"> (0° = quer)</span></span>
+          <input type="range" min={-80} max={80} step={1} value={g.angle_deg ?? 0} onChange={(e) => upd({ angle_deg: +e.target.value })} />
+        </label>
+        <div className="flex gap-1 flex-wrap">
+          {[-15, -5, 5, 15].map((d) => (
+            <button key={d} className="btn btn-sm" onClick={() => upd({ angle_deg: Math.max(-80, Math.min(80, (g.angle_deg ?? 0) + d)) })}>{d > 0 ? '+' : ''}{d}°</button>
+          ))}
+          <button className="btn btn-sm" onClick={() => upd({ angle_deg: 0 })} disabled={!g.angle_deg}>Quer (0°)</button>
+        </div>
         <Check label="Länge automatisch (Breite der Tasche + Überstand)" checked={g.auto_length !== false} onChange={(v) => upd({ auto_length: v })} />
         <Check label="Weich ausgeformt (ovaler Boden, runde Kante)" checked={g.rounded !== false} onChange={(v) => upd({ rounded: v })} />
-        <button className="btn btn-sm" onClick={() => upd({ attach: null })}>Vom Werkzeug lösen (frei verschieben)</button>
+        <button className="btn btn-sm" onClick={() => {
+          // Lage aus dem Layout übernehmen, damit die Mulde beim Lösen nicht springt
+          const lgr = lay?.grips.filter((q) => !q.auto)[sel.index]?.polygons[0]
+          const pts = lgr?.exterior ?? []
+          const cx = pts.length ? (Math.min(...pts.map((q) => q[0])) + Math.max(...pts.map((q) => q[0]))) / 2 - (lay?.shift[0] ?? 0) : g.x
+          const cy = pts.length ? (Math.min(...pts.map((q) => q[1])) + Math.max(...pts.map((q) => q[1]))) / 2 - (lay?.shift[1] ?? 0) : g.y
+          upd({ attach: null, x: round1(cx), y: round1(cy), rot_deg: (pl?.rot_deg ?? 0) + (g.angle_deg ?? 0), l: Math.round((curLen ?? g.l) * 10) / 10 })
+        }}>Vom Werkzeug lösen (frei verschieben)</button>
         {del}
       </div>
     )

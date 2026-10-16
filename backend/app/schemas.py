@@ -63,6 +63,7 @@ class GripRecess(BaseModel):
     s: float | None = Field(None, ge=-50, le=1000)   # Position entlang der Werkzeugachse (mm ab Ursprung)
     auto_length: bool = True                         # gekoppelt: Länge = Taschenbreite + 2 x Überstand
     edge_r: float = Field(1.0, ge=0, le=15)          # Rundung der Oberkante (weicher Übergang)
+    angle_deg: float = Field(0.0, ge=-80, le=80)     # gekoppelt: Schrägstellung gegenüber quer zur Werkzeugachse
 
 
 class Compartment(BaseModel):

@@ -1,3 +1,4 @@
+import math
 """Zielbild nach docs/samples/Spitzzange_Gridfinity_3x5_V2_mit_Kaesten.stl:
 Zange senkrecht, mittig, Langloch-Greifmulde quer am Gelenk mit rundem Boden, Kästen in den
 freien Flächen, deren Wand der Werkzeugkontur folgt."""
@@ -125,3 +126,19 @@ def test_bottom_points_and_polyline():
     # Gerade zwischen zwei Punkten: keine Delle
     b2 = bottom_from_points(s, [[0, 2], [80, 0], [160, 2]])
     assert b2[int(40 / 0.5)] == pytest.approx(1.0, abs=0.01)
+
+
+def test_attached_grip_can_be_angled():
+    from app.schemas import GripRecess
+    o = synthetic_pliers()
+    out = {}
+    for ang in (0.0, 30.0):
+        spec = InsertSpec(grid_x=3, grid_y=5, auto_grip=False, auto_center=False,
+                          placements=[Placement(object_id="p", x=60, y=10, rot_deg=90)],
+                          grip_recesses=[GripRecess(x=0, y=0, w=16, attach=0, s=80, angle_deg=ang)])
+        lay = compute_layout(spec, {"p": o})
+        (ax, ay), (bx, by) = list(lay.grips[0].axis.coords)
+        out[ang] = (math.degrees(math.atan2(by - ay, bx - ax)), math.hypot(bx - ax, by - ay))
+    # Werkzeug um 90° gedreht: quer zur Achse = x-Richtung; 30° schräg dreht die Mulde mit
+    assert abs(((out[30.0][0] - out[0.0][0]) + 180) % 360 - 180) == pytest.approx(30, abs=0.5)
+    assert out[30.0][1] > out[0.0][1]                 # schräge Sehne ist länger
