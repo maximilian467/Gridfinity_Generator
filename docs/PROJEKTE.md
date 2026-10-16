@@ -15,6 +15,8 @@ ihren Einlagen, eine Mustervorlage für die Einstellungen und eine 2D/3D-Ansicht
 | Werkzeug-Foto als Textur | `backend/app/vision/texture.py`, `GET /api/objects/{id}/texture` |
 | Projektseite (Schublade, Werkzeuge, Vorlage, Baseplate) | `frontend/src/features/project/ProjectPage.tsx` |
 | 3D-Klon | `frontend/src/features/project/Clone3D.tsx` |
+| Stapel-Scan (Oberfläche, EXIF-Sortierung, Paare) | `frontend/src/features/project/BatchScan.tsx` |
+| Stapel-Scan (Job, Auswertung ohne HTTP) | `backend/app/build_tasks.py` (`batch_scan_job`), `backend/app/scan.py` |
 | Rückfrage beim Überschreiben (Sprechblase) | `frontend/src/features/insert/Designer.tsx` (`patch`, `.override-bubble`) |
 
 ## Entscheidungen (und wie man sie umbaut)
@@ -39,3 +41,10 @@ ihren Einlagen, eine Mustervorlage für die Einstellungen und eine 2D/3D-Ansicht
    angelegten Spitzzangen-Einlage) als Gesamthöhe der Vorlage; damit sind alle Einlagen gleich hoch.
 8. **Scan im Projekt**: Werkzeug scannen legt das Objekt im Projekt an; "Einlage nach Projektvorlage"
    erzeugt die Einlage und ordnet sie gleich ein.
+9. **Stapel-Scan** ("Viele auf einmal"): Die Fotos werden im Browser nach EXIF-Aufnahmezeit (sonst Dateidatum,
+   dann Name) sortiert und paarweise als Draufsicht + Seitenansicht zugeordnet; jedes Paar wird einzeln hochgeladen
+   (`POST /projects/{id}/scan-pair`, legt das Werkzeug an), dann wertet `POST /projects/{id}/batch-scan` alles in
+   einem Hintergrund-Job aus (A4-Blatt, Freistellen, Hand weg, Profil) und ruft danach `generate` auf. Fortschritt
+   je Werkzeug schreibt der Worker über `jobs.report` (`progress.json`). Ein Fehler betrifft nur sein Werkzeug;
+   der nicht geschaffte Schritt bleibt im Scan-Assistenten offen. Auto-Tausch vertauschter Ansichten gibt es nicht,
+   nur eine Warnung ("dicker als breit").
