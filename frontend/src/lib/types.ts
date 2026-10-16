@@ -167,5 +167,6 @@ export interface CloneInsert {
   id: string; name: string; colors: PartColors; overrides: string[]; placed: DrawerPlacement | null; error: string | null
   gx?: number; gy?: number; total_height?: number; layout?: LayoutOut; tools?: CloneTool[]; cut_union?: PolyOut[]
 }
-export interface CloneData { plan: PlatePlan; pitch: number; inserts: CloneInsert[]; warnings: string[]; heights_equal: boolean }
+export interface CellConflict { cell: [number, number]; kind: 'overlap' | 'outside'; inserts: string[]; ids: string[] }
+export interface CloneData { plan: PlatePlan; pitch: number; inserts: CloneInsert[]; warnings: string[]; heights_equal: boolean; conflicts?: CellConflict[] }
 export interface TextureInfo { url: string; x0: number; x1: number; y0: number; y1: number; color?: string }

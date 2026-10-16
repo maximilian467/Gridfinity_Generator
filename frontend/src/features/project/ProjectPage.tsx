@@ -112,6 +112,19 @@ function occupied(data: CloneData, except?: string): Set<string> {
   return s
 }
 
+/** Um die Mitte drehen und im Raster halten (ragt sie trotzdem über, markiert der Klon das rot) */
+function rotated(data: CloneData, ins: CloneInsert): { ix: number; iy: number; rot: 0 | 90 } {
+  const q = ins.placed!
+  const [w, h] = q.rot === 0 ? [ins.gx!, ins.gy!] : [ins.gy!, ins.gx!]
+  const rot: 0 | 90 = q.rot === 0 ? 90 : 0
+  const [w2, h2] = [h, w]
+  const clamp = (v: number, n: number, s: number) => Math.max(0, Math.min(v, Math.max(0, n - s)))
+  return {
+    ix: clamp(Math.round(q.ix + w / 2 - w2 / 2), data.plan.cells_x, w2),
+    iy: clamp(Math.round(q.iy + h / 2 - h2 / 2), data.plan.cells_y, h2), rot,
+  }
+}
+
 function firstFit(data: CloneData, ins: CloneInsert): { ix: number; iy: number; rot: 0 | 90 } | null {
   const occ = occupied(data, ins.id)
   const act = new Set(data.plan.active.map(([a, b]) => `${a},${b}`))
@@ -135,9 +148,12 @@ function DrawerTab({ p, data, busy, refresh, setDisabled }: {
   const [msg, setMsg] = useState<{ kind: 'warn' | 'err' | 'ok'; text: string } | null>(null)
   const nav = useNavigate()
   const place = useMutation({
-    mutationFn: (v: { id: string; pl: { ix: number; iy: number; rot: 0 | 90 } | null }) =>
-      api.place(p.id, v.id, v.pl ? { insert_id: v.id, ...v.pl } : null),
-    onSuccess: () => { setMsg(null); refresh() },
+    mutationFn: (v: { id: string; pl: { ix: number; iy: number; rot: 0 | 90 } | null; force?: boolean }) =>
+      api.place(p.id, v.id, v.pl ? { insert_id: v.id, ...v.pl } : null, v.force ?? true),
+    onSuccess: (r) => {
+      setMsg(r.fits ? null : { kind: 'warn', text: 'Gesetzt, aber dort ist eigentlich kein Platz: die überlappenden Zellen sind rot markiert. Verschieben, drehen oder eine andere Einlage herausnehmen.' })
+      refresh()
+    },
     onError: (e) => { setMsg({ kind: 'err', text: errText(e) }); refresh() },
   })
   const arrange = useMutation({
@@ -181,8 +197,12 @@ function DrawerTab({ p, data, busy, refresh, setDisabled }: {
           <section className="grid gap-2">
             <h3 className="sect">{selected.name}</h3>
             <div className="num hint mt-0">{selected.gx} x {selected.gy} Einheiten · {selected.total_height?.toFixed(1)} mm hoch</div>
+            {data?.conflicts?.some((k) => k.ids.includes(selected.id)) && (
+              <Msg kind="warn">Liegt nicht frei: {[...new Set(data.conflicts.filter((k) => k.ids.includes(selected.id)).flatMap((k) => k.kind === 'overlap'
+                ? k.inserts.filter((_, n) => k.ids[n] !== selected.id).map((n) => `überlappt ${n}`) : ['ragt über Rand oder abgewählte Zellen']))].join(', ')}. Rot markiert.</Msg>
+            )}
             <div className="flex flex-wrap gap-2">
-              <button className="btn btn-sm" onClick={() => place.mutate({ id: selected.id, pl: { ...selected.placed!, rot: selected.placed!.rot === 0 ? 90 : 0 } })}>
+              <button className="btn btn-sm" onClick={() => place.mutate({ id: selected.id, pl: rotated(data!, selected) })}>
                 <ArrowsClockwise size={14} /> Drehen</button>
               <button className="btn btn-sm" onClick={() => { place.mutate({ id: selected.id, pl: null }); setSel(null) }}><SignOut size={14} /> Herausnehmen</button>
               <button className="btn btn-sm" onClick={() => nav(`/insert/${selected.id}`)}><Cube size={14} /> Bearbeiten</button>
@@ -200,7 +220,7 @@ function DrawerTab({ p, data, busy, refresh, setDisabled }: {
               {i.error ? <span className="chip chip-warn text-xs" title={i.error}>unfertig</span> : (
                 <button className="btn btn-sm" disabled={!data} onClick={() => {
                   const f = data && firstFit(data, i)
-                  if (f) place.mutate({ id: i.id, pl: f })
+                  if (f) place.mutate({ id: i.id, pl: f, force: false })
                   else setMsg({ kind: 'warn', text: `Kein Platz für ${i.name}. Erst eine andere Einlage herausnehmen.` })
                 }}>Einsetzen</button>
               )}
@@ -232,7 +252,7 @@ function DrawerTab({ p, data, busy, refresh, setDisabled }: {
                 onToggleCells={(cells, on) => setDisabled(toggleCells(p.drawer.disabled ?? [], cells, on))}
                 onDrop={(id, pl) => place.mutate({ id, pl })} />
             </div>
-            {cellMode ? <div className="hint mt-0">Zellen anklicken oder darüberziehen, um sie aus der Baseplate zu schneiden (eigene Form, z. B. Ecke oder Mitte frei). Nochmal klicken holt sie zurück. Die Kacheln teilen sich automatisch neu auf.</div> : <div className="hint mt-0">Einlage anklicken zum Auswählen, ziehen zum Verschieben (rastet auf 42-mm-Zellen ein). Einlagen von links ("Nicht in der Schublade") lassen sich direkt aufs Raster ziehen. Belegte oder abgewählte Zellen lehnt die Schublade ab.</div>}
+            {cellMode ? <div className="hint mt-0">Zellen anklicken oder darüberziehen, um sie aus der Baseplate zu schneiden (eigene Form, z. B. Ecke oder Mitte frei). Nochmal klicken holt sie zurück. Die Kacheln teilen sich automatisch neu auf.</div> : <div className="hint mt-0">Einlage anklicken zum Auswählen, ziehen zum Verschieben (rastet auf 42-mm-Zellen ein). Einlagen von links ("Nicht in der Schublade") lassen sich direkt aufs Raster ziehen. Liegt eine Einlage auf belegten oder abgewählten Zellen, wird sie trotzdem gesetzt und die Stelle rot markiert.</div>}
           </>
         ) : (
           <Suspense fallback={<div className="skeleton" style={{ height: 560 }} />}><Clone3D data={data} /></Suspense>
@@ -326,6 +346,19 @@ function DrawerView({ p, data, sel, onSelect, onDrop, cellMode = false, onToggle
           )
         })}
         </g>
+        {data.conflicts?.map((k) => (
+          <g key={`${k.cell[0]},${k.cell[1]}`} pointerEvents="none">
+            <title>{k.kind === 'overlap' ? `Überlappung: ${k.inserts.join(', ')}` : `Kein Platz (Rand/abgewählt): ${k.inserts.join(', ')}`}</title>
+            <rect x={P.origin[0] + k.cell[0] * PITCH + 1} y={P.origin[1] + k.cell[1] * PITCH + 1} width={PITCH - 2} height={PITCH - 2} rx={3}
+              fill="url(#conflict-hatch)" stroke="var(--err)" strokeWidth={2} className="conflict-pulse" />
+          </g>
+        ))}
+        <defs>
+          <pattern id="conflict-hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="7" height="7" fill="color-mix(in srgb, var(--err) 22%, transparent)" />
+            <line x1="0" y1="0" x2="0" y2="7" stroke="var(--err)" strokeWidth="2.2" />
+          </pattern>
+        </defs>
       </PlateEditor>
     </div>
   )

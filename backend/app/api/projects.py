@@ -259,7 +259,8 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
         raise HTTPException(422, str(e)) from e
     pos = {q.insert_id: q for q in p.placements}
     inserts, warnings, heights = [], [], []
-    occupied: dict[tuple[int, int], str] = {}
+    occupied: dict[tuple[int, int], tuple[str, str]] = {}
+    conflicts: dict[tuple[int, int], dict] = {}          # Zellen mit Überlappung oder außerhalb (zum Markieren)
     for ins in project_inserts(p):
         item = {"id": ins.id, "name": ins.name, "colors": ins.color_hex.model_dump(), "overrides": ins.overrides,
                 "placed": pos[ins.id].model_dump() if ins.id in pos else None, "error": None}
@@ -280,13 +281,22 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
                 q = pos[ins.id]
                 w, h = (lay.grid_x, lay.grid_y) if q.rot == 0 else (lay.grid_y, lay.grid_x)
                 for c in [(i, j) for i in range(q.ix, q.ix + w) for j in range(q.iy, q.iy + h)]:
-                    if c not in plan.active:
-                        warnings.append(f"{ins.name} liegt außerhalb der Baseplate oder auf einer abgewählten Zelle.")
-                        break
+                    if c not in plan.active:          # Rand, abgewählte Zelle oder außerhalb der Schublade
+                        k = conflicts.setdefault(c, {"cell": list(c), "kind": "outside", "inserts": [], "ids": []})
+                        k["inserts"].append(ins.name)
+                        k["ids"].append(ins.id)
+                        if f"{ins.name} liegt" not in " ".join(warnings):
+                            warnings.append(f"{ins.name} liegt teilweise außerhalb der Baseplate oder auf einer abgewählten Zelle (rot markiert).")
                     if c in occupied:
-                        warnings.append(f"{ins.name} überlappt {occupied[c]}.")
-                        break
-                    occupied[c] = ins.name
+                        oid, oname = occupied[c]
+                        k = conflicts.setdefault(c, {"cell": list(c), "kind": "overlap", "inserts": [], "ids": []})
+                        k["kind"] = "overlap"
+                        for i_, n_ in ((oid, oname), (ins.id, ins.name)):
+                            if i_ not in k["ids"]:
+                                k["ids"].append(i_)
+                                k["inserts"].append(n_)
+                        warnings.append(f"{ins.name} überlappt {oname} (rot markiert).")
+                    occupied.setdefault(c, (ins.id, ins.name))
         except (KeyError, ValueError, IndexError) as e:
             item["error"] = str(e) if not isinstance(e, KeyError) else "Werkzeug fehlt"
         inserts.append(item)
@@ -299,20 +309,23 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
         if p.drawer_h and max(hs) > p.drawer_h:
             warnings.append(f"Höchste Einlage ({max(hs):.1f} mm) ist höher als die Schublade ({p.drawer_h:.0f} mm).")
     return {"plan": plan_info(p.drawer, plan), "pitch": PITCH, "inserts": inserts,
-            "warnings": list(dict.fromkeys(warnings)),
+            "warnings": list(dict.fromkeys(warnings)), "conflicts": list(conflicts.values()),
             "heights_equal": bool(heights) and max(h for h, _ in heights) - min(h for h, _ in heights) <= 0.05}
 
 
 class PlaceBody(BaseModel):
     placement: DrawerPlacement | None = None     # None = aus der Schublade nehmen
     insert_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    force: bool = False                          # trotzdem setzen; Überlappung zeigt der Klon rot an
 
 
 @router.post("/{pid}/place")
 def place(pid: str, body: PlaceBody, user: Principal = Depends(current_user)) -> dict:
-    """Eine Einlage von Hand setzen/verschieben/drehen oder herausnehmen. Prüft Platz."""
+    """Eine Einlage von Hand setzen/verschieben/drehen oder herausnehmen. Prüft Platz; mit force wird
+    trotzdem gesetzt (z. B. Drehen an engem Platz) und der Klon markiert die Überlappung."""
     p = _get(pid, user)
     others = [q for q in p.placements if q.insert_id != body.insert_id]
+    ok = True
     if body.placement is not None:
         try:
             ins = storage.load_insert(body.insert_id, user)
@@ -336,12 +349,13 @@ def place(pid: str, body: PlaceBody, user: Principal = Depends(current_user)) ->
                 w, h = (qx, qy) if q.rot == 0 else (qy, qx)
                 free -= {(i, j) for i in range(q.ix, q.ix + w) for j in range(q.iy, q.iy + h)}
         w, h = (gx, gy) if body.placement.rot == 0 else (gy, gx)
-        if not fits(free, body.placement.ix, body.placement.iy, w, h):
+        ok = fits(free, body.placement.ix, body.placement.iy, w, h)
+        if not ok and not body.force:
             raise HTTPException(409, "Dort ist kein Platz (Rand, abgewählte Zelle oder andere Einlage).")
         others.append(body.placement.model_copy(update={"insert_id": body.insert_id}))
     p.placements = others
     storage.save_project(p)
-    return {"ok": True, "placements": [q.model_dump() for q in p.placements]}
+    return {"ok": True, "fits": body.placement is None or ok, "placements": [q.model_dump() for q in p.placements]}
 
 
 # ---- Stapel-Scan: viele Werkzeuge auf einmal (je Paar Draufsicht + Seitenansicht) ----------------

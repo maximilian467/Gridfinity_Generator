@@ -88,8 +88,8 @@ export const api = {
   arrange: (pid: string, mode: 'all' | 'missing') =>
     req<{ placed: string[]; left_out: string[]; left_out_names: string[]; unfinished_names?: string[] }>(`/projects/${pid}/arrange`, json('POST', { mode })),
   clone: (pid: string) => req<CloneData>(`/projects/${pid}/clone`),
-  place: (pid: string, insert_id: string, placement: DrawerPlacement | null) =>
-    req<{ ok: boolean; placements: DrawerPlacement[] }>(`/projects/${pid}/place`, json('POST', { insert_id, placement })),
+  place: (pid: string, insert_id: string, placement: DrawerPlacement | null, force = false) =>
+    req<{ ok: boolean; fits: boolean; placements: DrawerPlacement[] }>(`/projects/${pid}/place`, json('POST', { insert_id, placement, force })),
   texture: (oid: string) => req<TextureInfo>(`/objects/${oid}/texture`),
   scanPair: (pid: string, top: File, side: File, name: string) => {
     const fd = new FormData(); fd.append('top', top); fd.append('side', side); fd.append('name', name)

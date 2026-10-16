@@ -181,6 +181,15 @@ function Scene({ data, showTools, quality, showPlate }: { data: CloneData; showT
       {/* Schubladenboden */}
       <mesh position={[W / 2, D / 2, -0.6]}><boxGeometry args={[W + 2, D + 2, 1]} /><meshStandardMaterial color="#d8d4cc" /></mesh>
       {showPlate && <Plate data={data} />}
+      {data.conflicts?.map((k) => {
+        const hmax = Math.max(20, ...data.inserts.map((i) => i.total_height ?? 0)) + 2
+        return (
+          <mesh key={`${k.cell[0]},${k.cell[1]}`} position={[data.plan.origin[0] + (k.cell[0] + 0.5) * data.pitch, data.plan.origin[1] + (k.cell[1] + 0.5) * data.pitch, hmax / 2]}>
+            <boxGeometry args={[data.pitch - 1, data.pitch - 1, hmax]} />
+            <meshStandardMaterial color="#e03131" transparent opacity={0.28} depthWrite={false} />
+          </mesh>
+        )
+      })}
       {data.inserts.map((ins) => {
         const tr = insertTransform(data, ins)
         if (!tr) return null

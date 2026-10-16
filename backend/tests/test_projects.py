@@ -121,3 +121,17 @@ def test_place_unfinished_insert_gives_422():
     assert r.status_code == 422
     a = client.post(f"/api/projects/{p['id']}/arrange", json={"mode": "all"}).json()
     assert i["id"] in a["unfinished"]
+
+
+def test_forced_place_marks_overlap():
+    p, _ = _project()
+    pid = p["id"]
+    a, b = client.post(f"/api/projects/{pid}/generate", json={}).json()["created"]
+    qa = next(q for q in client.get(f"/api/projects/{pid}").json()["placements"] if q["insert_id"] == a)
+    r = client.post(f"/api/projects/{pid}/place", json={"insert_id": b, "force": True,
+                                                       "placement": {**qa, "insert_id": b, "rot": 90 - qa["rot"]}}).json()
+    assert r["ok"] and r["fits"] is False
+    c = client.get(f"/api/projects/{pid}/clone").json()
+    over = [k for k in c["conflicts"] if k["kind"] == "overlap"]
+    assert over and all(set(k["ids"]) == {a, b} for k in over)
+    assert any("überlappt" in w for w in c["warnings"])
