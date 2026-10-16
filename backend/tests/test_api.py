@@ -85,15 +85,8 @@ def test_full_flow_with_synthetic_photos():
         r = client.get(j["outputs"][key])
         assert r.status_code == 200 and len(r.content) > 500, key
     assert zipfile.ZipFile(io.BytesIO(client.get(j["outputs"]["3mf"]).content)).namelist()
-    # 3D-Vorschau: GLB direkt (Magic "glTF") und als JSON-Ersatzweg mit identischem Inhalt
-    import base64
-    glb = client.get(j["outputs"]["glb"]).content
-    assert glb[:4] == b"glTF"
-    alt = client.get(j["outputs"]["glb"] + "?format=b64")
-    assert alt.headers["content-type"].startswith("application/json")
-    assert base64.b64decode(alt.json()["b64"]) == glb
-    # nur für GLB: andere Dateien bleiben normale Downloads
-    assert not client.get(j["outputs"]["stl"] + "?format=b64").headers["content-type"].startswith("application/json")
+    # 3D-Vorschau: GLB beginnt mit "glTF" (daran prüft die Vorschau, ob wirklich das Modell ankam)
+    assert client.get(j["outputs"]["glb"]).content[:4] == b"glTF"
 
 
 def test_demo_object_and_insert_crud():

@@ -6,6 +6,7 @@ import { api } from '../../lib/api'
 import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec, PartColors, TemplateField } from '../../lib/types'
 import { FIELD_LABELS, TEMPLATE_FIELDS } from '../../lib/types'
 import { PartColorsEdit } from '../../components/ColorPick'
+import { ChunkGuard } from '../../components/ChunkGuard'
 import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
 import { arrange, placeNew } from '../../lib/placement'
 import { Editor2D } from './Editor2D'
@@ -506,7 +507,9 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <>
               {outdated && <Msg kind="warn">Die Einlage wurde seit dem letzten Erzeugen geändert. Die Vorschau zeigt den alten Stand.
                 <button className="btn btn-sm ml-2" onClick={() => build.mutate()}>Neu erzeugen</button></Msg>}
-              <Suspense fallback={<div className="skeleton" style={{ height: 520 }} />}><Preview3D url={job.data.outputs.glb} /></Suspense>
+              <ChunkGuard height={520} what="Die 3D-Vorschau">
+                <Suspense fallback={<div className="skeleton" style={{ height: 520 }} />}><Preview3D url={job.data.outputs.glb} /></Suspense>
+              </ChunkGuard>
             </>
           ) : (
             <div className="panel grid place-items-center gap-3 p-10 text-center" style={{ minHeight: 320 }}>

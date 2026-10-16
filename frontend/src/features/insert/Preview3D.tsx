@@ -41,7 +41,7 @@ function Model({ url, clip }: { url: string; clip: number }) {
   )
 }
 
-/** GLB selbst laden (mit Ersatzweg, falls ein Proxy die Datei blockiert) -> blob:-URL */
+/** GLB selbst laden und prüfen (klare Meldung statt leerer Ansicht) -> blob:-URL */
 function useGlbUrl(url: string): { src: string | null; error: string | null } {
   const [st, setSt] = useState<{ src: string | null; error: string | null }>({ src: null, error: null })
   useEffect(() => {
@@ -49,7 +49,7 @@ function useGlbUrl(url: string): { src: string | null; error: string | null } {
     let obj: string | null = null
     setSt({ src: null, error: null })
     fetchGlb(url)
-      .then(({ bytes }) => {
+      .then((bytes) => {
         obj = URL.createObjectURL(new Blob([bytes], { type: 'model/gltf-binary' }))
         if (alive) setSt({ src: obj, error: null })
       })

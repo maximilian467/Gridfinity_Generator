@@ -7,6 +7,7 @@ import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec
 import { FIELD_LABELS } from '../../lib/types'
 import { BusyBar, Check, Empty, Msg, NumberField, Segmented, Silhouette, errText } from '../../components/ui'
 import { PartColorsEdit } from '../../components/ColorPick'
+import { ChunkGuard } from '../../components/ChunkGuard'
 import { PlateBuild, PlateSettings, toggleCells, usePlatePlan } from '../baseplate/Baseplate'
 import { PITCH, PlateEditor } from '../baseplate/PlateEditor'
 import { BatchScan } from './BatchScan'
@@ -255,7 +256,9 @@ function DrawerTab({ p, data, busy, refresh, setDisabled }: {
             {cellMode ? <div className="hint mt-0">Zellen anklicken oder darüberziehen, um sie aus der Baseplate zu schneiden (eigene Form, z. B. Ecke oder Mitte frei). Nochmal klicken holt sie zurück. Die Kacheln teilen sich automatisch neu auf.</div> : <div className="hint mt-0">Einlage anklicken zum Auswählen, ziehen zum Verschieben (rastet auf 42-mm-Zellen ein). Einlagen von links ("Nicht in der Schublade") lassen sich direkt aufs Raster ziehen. Liegt eine Einlage auf belegten oder abgewählten Zellen, wird sie trotzdem gesetzt und die Stelle rot markiert.</div>}
           </>
         ) : (
-          <Suspense fallback={<div className="skeleton" style={{ height: 560 }} />}><Clone3D data={data} /></Suspense>
+          <ChunkGuard height={560} what="Der 3D-Klon">
+            <Suspense fallback={<div className="skeleton" style={{ height: 560 }} />}><Clone3D data={data} /></Suspense>
+          </ChunkGuard>
         )}
       </section>
     </div>
