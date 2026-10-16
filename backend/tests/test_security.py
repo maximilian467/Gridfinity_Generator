@@ -263,3 +263,11 @@ def test_auth_cannot_be_disabled_in_prod(monkeypatch):
 def test_api_not_cached(open_client):
     assert open_client.get("/api/objects").headers["cache-control"] == "no-store"
     assert "github.com" in open_client.get("/api/auth/config").json()["source"]
+
+
+def test_html_is_revalidated_after_updates():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    r = TestClient(app).get("/baseplate")
+    assert r.headers.get("cache-control") == "no-cache"

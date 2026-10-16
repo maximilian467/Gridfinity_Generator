@@ -79,6 +79,9 @@ async def guard(request: Request, call_next):
         resp.headers.setdefault(k, v)
     if not path.startswith("/api/"):
         resp.headers.setdefault("Content-Security-Policy", CSP)
+        # Seite immer neu prüfen (sonst läuft nach einem Update noch der alte Stand); Assets haben Hash im Namen
+        resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable" if path.startswith("/assets/")
+                                else "no-cache")
     elif not path.startswith("/api/files/"):
         resp.headers.setdefault("Cache-Control", "no-store")    # persönliche Daten nicht zwischenspeichern
     if request.headers.get("x-forwarded-proto") == "https" or os.environ.get("COOKIE_SECURE") == "1":

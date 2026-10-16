@@ -81,7 +81,8 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
           </Msg>
         )
       })()}
-      {tab === 'drawer' && <DrawerTab p={p} data={data} busy={clone.isFetching} refresh={refreshClone} />}
+      {tab === 'drawer' && <DrawerTab p={p} data={data} busy={clone.isFetching} refresh={refreshClone}
+        setDisabled={(d) => patch({ drawer: { ...p.drawer, disabled: d } })} />}
       {tab === 'tools' && <ToolsTab p={p} data={data} refresh={refreshClone} />}
       {tab === 'template' && <TemplateTab p={p} setTemplate={(t) => patch({ template: t })} />}
       {tab === 'plate' && <PlateTab p={p} patch={patch} />}
@@ -119,8 +120,11 @@ function firstFit(data: CloneData, ins: CloneInsert): { ix: number; iy: number; 
   return null
 }
 
-function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData | undefined; busy: boolean; refresh: () => void }) {
+function DrawerTab({ p, data, busy, refresh, setDisabled }: {
+  p: ProjectSpec; data: CloneData | undefined; busy: boolean; refresh: () => void; setDisabled: (d: [number, number][]) => void
+}) {
   const [view, setView] = useState<'2d' | '3d'>('2d')
+  const [cellMode, setCellMode] = useState(false)
   const [sel, setSel] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ kind: 'warn' | 'err' | 'ok'; text: string } | null>(null)
   const nav = useNavigate()
@@ -209,15 +213,20 @@ function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData
       <section className="grid gap-3 content-start min-w-0">
         <div className="flex items-center gap-2">
           <Segmented value={view} onChange={setView} options={[{ value: '2d', label: 'Anordnen (2D)' }, { value: '3d', label: 'Digitaler Klon (3D)' }]} />
+          {view === '2d' && (
+            <Segmented value={cellMode ? 'cells' : 'inserts'} onChange={(v) => setCellMode(v === 'cells')}
+              options={[{ value: 'inserts', label: 'Einlagen verschieben' }, { value: 'cells', label: 'Zellen ausschneiden' }]} />
+          )}
           {busy && <div className="w-40"><BusyBar /></div>}
         </div>
         {!data ? <div className="skeleton" style={{ height: 480 }} /> : view === '2d' ? (
           <>
             <div className="panel p-3">
-              <DrawerView p={p} data={data} sel={sel} onSelect={setSel}
+              <DrawerView p={p} data={data} sel={sel} onSelect={setSel} cellMode={cellMode}
+                onToggleCells={(cells, on) => setDisabled(toggleCells(p.drawer.disabled ?? [], cells, on))}
                 onDrop={(id, pl) => place.mutate({ id, pl })} />
             </div>
-            <div className="hint mt-0">Einlage anklicken zum Auswählen, ziehen zum Verschieben (rastet auf 42-mm-Zellen ein). Einlagen von links ("Nicht in der Schublade") lassen sich direkt aufs Raster ziehen. Belegte oder abgewählte Zellen lehnt die Schublade ab.</div>
+            {cellMode ? <div className="hint mt-0">Zellen anklicken oder darüberziehen, um sie aus der Baseplate zu schneiden (eigene Form, z. B. Ecke oder Mitte frei). Nochmal klicken holt sie zurück. Die Kacheln teilen sich automatisch neu auf.</div> : <div className="hint mt-0">Einlage anklicken zum Auswählen, ziehen zum Verschieben (rastet auf 42-mm-Zellen ein). Einlagen von links ("Nicht in der Schublade") lassen sich direkt aufs Raster ziehen. Belegte oder abgewählte Zellen lehnt die Schublade ab.</div>}
           </>
         ) : (
           <Suspense fallback={<div className="skeleton" style={{ height: 560 }} />}><Clone3D data={data} /></Suspense>
@@ -227,10 +236,13 @@ function DrawerTab({ p, data, busy, refresh }: { p: ProjectSpec; data: CloneData
   )
 }
 
-function DrawerView({ p, data, sel, onSelect, onDrop }: {
+function DrawerView({ p, data, sel, onSelect, onDrop, cellMode = false, onToggleCells }: {
   p: ProjectSpec; data: CloneData; sel: string | null; onSelect: (id: string) => void
   onDrop: (id: string, pl: { ix: number; iy: number; rot: 0 | 90 }) => void
+  cellMode?: boolean; onToggleCells?: (cells: [number, number][], on: boolean) => void
 }) {
+  // Zellen-Plan aus den aktuellen (evtl. ungespeicherten) Einstellungen, damit Ausschneiden sofort sichtbar ist
+  const live = usePlatePlan(p.drawer)
   const wrap = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<{ id: string; dx: number; dy: number; x: number; y: number } | null>(null)
   const P = data.plan
@@ -281,7 +293,9 @@ function DrawerView({ p, data, sel, onSelect, onDrop }: {
   }
   return (
     <div ref={wrap} onDragOver={(e) => { if (e.dataTransfer.types.includes('text/insert')) e.preventDefault() }} onDrop={onDropNew}>
-      <PlateEditor drawer={[p.drawer.drawer_x, p.drawer.drawer_y]} plan={P} disabled={p.drawer.disabled ?? []} editable={false} height="min(68vh, 640px)">
+      <PlateEditor drawer={[p.drawer.drawer_x, p.drawer.drawer_y]} plan={live.data ?? P} disabled={p.drawer.disabled ?? []}
+        editable={cellMode} onToggle={onToggleCells} height="min(68vh, 640px)">
+        <g style={cellMode ? { pointerEvents: 'none', opacity: 0.35 } : undefined}>
         {data.inserts.filter((i) => i.placed && i.gx).map((i) => {
           const [w, h] = i.placed!.rot === 0 ? [i.gx!, i.gy!] : [i.gy!, i.gx!]
           let x = P.origin[0] + i.placed!.ix * PITCH, y = P.origin[1] + i.placed!.iy * PITCH
@@ -305,6 +319,7 @@ function DrawerView({ p, data, sel, onSelect, onDrop }: {
             </g>
           )
         })}
+        </g>
       </PlateEditor>
     </div>
   )
