@@ -9,15 +9,15 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-from .. import storage
+from .. import scan, storage
 from ..auth import Principal, current_user
 from ..geometry.samples import synthetic_pliers
-from ..schemas import ObjectSpec, Profile
-from ..vision import a4, contour, exif, hands, pose, profile, segment
+from ..scan import ScanError
+from ..schemas import ObjectSpec
+from ..vision import a4, profile, segment
 
 router = APIRouter(prefix="/objects", tags=["objects"])
 
-VIEW_SCALE = 0.5          # Anzeigebild der entzerrten Ansicht
 MAX_PHOTO_BYTES = 40 * 1024 * 1024
 MAX_MASK_BYTES = 8 * 1024 * 1024
 PHOTO_TYPES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -28,7 +28,6 @@ async def _read_limited(file: UploadFile, limit: int) -> bytes:
     if len(data) > limit:
         raise HTTPException(413, f"Datei zu groß (max. {limit // (1024 * 1024)} MB)")
     return data
-PREVIEW_MAX = 2000        # Anzeigebild des Originals
 
 
 def _obj(oid: str, user: Principal) -> ObjectSpec:
@@ -43,37 +42,8 @@ def _check_view(view: str) -> None:
         raise HTTPException(422, "view muss top oder side sein")
 
 
-def _photo(spec: ObjectSpec, view: str) -> dict:
-    ph = spec.photos.get(view)
-    if not ph:
-        raise HTTPException(409, f"Foto '{view}' fehlt")
-    return ph
-
-
-def _load(spec: ObjectSpec, view: str):
-    ph = _photo(spec, view)
-    bgr, f35 = exif.load_image(storage.object_dir(spec.id) / ph["original"])
-    return bgr, f35, ph
-
-
-def _write_jpg(path: Path, img: np.ndarray, q: int = 90) -> None:
-    cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, q])
-
-
-def _process_corners(spec: ObjectSpec, view: str, bgr, f35, corners) -> dict:
-    d = storage.object_dir(spec.id)
-    ph = spec.photos[view]
-    ph["corners_px"] = np.asarray(corners, float).tolist()
-    p = pose.estimate_pose(corners, bgr.shape, f35)
-    ph["pose"] = {"C_mm": list(p.C_mm), "f_px": p.f_px, "f35_assumed": p.f35_assumed, "warnings": list(p.warnings)}
-    rect = a4.rectify(bgr, np.asarray(corners, np.float32))
-    small = cv2.resize(rect, None, fx=VIEW_SCALE, fy=VIEW_SCALE, interpolation=cv2.INTER_AREA)
-    _write_jpg(d / f"{view}_rect_view.jpg", small)
-    ph["rectified_url"] = storage.url_for(d / f"{view}_rect_view.jpg")
-    ph["view_scale"] = VIEW_SCALE
-    ph["rect_size"] = [a4.RECT_W, a4.RECT_H]
-    ph.pop("mask_url", None)
-    return rect
+def _http(e: ScanError) -> HTTPException:
+    return HTTPException(e.status, str(e))
 
 
 Pt = Annotated[list[Annotated[float, Field(ge=-1e5, le=1e5)]], Field(min_length=2, max_length=2)]
@@ -147,32 +117,15 @@ def delete(oid: str, user: Principal = Depends(current_user)) -> dict:
 async def upload_photo(oid: str, view: str, file: UploadFile = File(...), user: Principal = Depends(current_user)) -> dict:
     _check_view(view)
     spec = _obj(oid, user)
-    d = storage.object_dir(oid)
     ext = Path(file.filename or "x.jpg").suffix.lower() or ".jpg"
     if ext not in PHOTO_TYPES:
         raise HTTPException(415, "Bitte ein Foto als JPG, PNG oder WebP hochladen")
     data = await _read_limited(file, MAX_PHOTO_BYTES)
-    name = f"{view}_original{ext}"
-    tmp = d / f".upload{ext}"
-    tmp.write_bytes(data)
     try:
-        bgr, f35 = exif.load_image(tmp)
-    except Exception:  # noqa: BLE001
-        tmp.unlink(missing_ok=True)
-        raise HTTPException(422, "Bild nicht lesbar (beschädigt oder zu groß)") from None
-    for old in d.glob(f"{view}_*"):
-        old.unlink()
-    tmp.replace(d / name)
-    h, w = bgr.shape[:2]
-    k = min(1.0, PREVIEW_MAX / max(h, w))
-    _write_jpg(d / f"{view}_preview.jpg", cv2.resize(bgr, None, fx=k, fy=k, interpolation=cv2.INTER_AREA))
-    corners = a4.find_a4_corners(bgr)
-    found = corners is not None
-    if not found:   # Fallback: Bildrand-nahes Rechteck, Nutzer korrigiert
-        corners = np.array([[w * .15, h * .2], [w * .85, h * .2], [w * .85, h * .8], [w * .15, h * .8]], np.float32)
-    spec.photos[view] = {"original": name, "preview_url": storage.url_for(d / f"{view}_preview.jpg"),
-                         "preview_scale": k, "size": [w, h], "f35": f35, "corners_found": found}
-    _process_corners(spec, view, bgr, f35, corners)
+        bgr, f35 = scan.store_photo(spec, view, data, ext)
+    except ScanError as e:
+        raise _http(e) from None
+    scan.detect_corners(spec, view, bgr, f35)
     storage.save_object(spec)
     return spec.photos[view]
 
@@ -183,97 +136,24 @@ def set_corners(oid: str, view: str, body: CornersBody, user: Principal = Depend
     if len(body.corners_px) != 4:
         raise HTTPException(422, "4 Ecken erwartet")
     spec = _obj(oid, user)
-    bgr, f35, _ = _load(spec, view)
-    _process_corners(spec, view, bgr, f35, a4.order_corners(np.array(body.corners_px, np.float32)))
+    try:
+        bgr, f35, _ = scan.load(spec, view)
+    except ScanError as e:
+        raise _http(e) from None
+    scan.process_corners(spec, view, bgr, f35, a4.order_corners(np.array(body.corners_px, np.float32)))
     storage.save_object(spec)
     return spec.photos[view]
-
-
-def _save_mask(spec: ObjectSpec, view: str, rect: np.ndarray, mask: np.ndarray, fill_holes: bool,
-               hand: np.ndarray | None = None) -> dict:
-    d = storage.object_dir(spec.id)
-    ph = spec.photos[view]
-    cv2.imwrite(str(d / f"{view}_mask.png"), mask)
-    over = cv2.resize(rect, None, fx=VIEW_SCALE, fy=VIEW_SCALE, interpolation=cv2.INTER_AREA)
-    m = cv2.resize(mask, (over.shape[1], over.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
-    tint = over.copy()
-    tint[m] = (0.45 * tint[m] + 0.55 * np.array([30, 120, 255])).astype(np.uint8)
-    cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    cv2.drawContours(tint, cnts, -1, (0, 60, 255), 1)
-    hand_f = storage.object_dir(spec.id) / f"{view}_hand.png"
-    if hand is not None and hand.any():
-        cv2.imwrite(str(hand_f), hand)
-        ph["hand_url"] = storage.url_for(hand_f)
-    elif hand is not None:
-        hand_f.unlink(missing_ok=True)
-        ph.pop("hand_url", None)
-    if hand is not None and hand.any():
-        hm = cv2.resize(hand, (over.shape[1], over.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
-        stripes = ((np.add.outer(np.arange(hm.shape[0]), np.arange(hm.shape[1])) // 6) % 2 == 0)
-        sel = hm & stripes
-        tint[sel] = (0.35 * tint[sel] + 0.65 * np.array([90, 90, 90])).astype(np.uint8)
-    _write_jpg(d / f"{view}_overlay.jpg", tint)
-    ph["mask_url"] = storage.url_for(d / f"{view}_mask.png")
-    ph["overlay_url"] = storage.url_for(d / f"{view}_overlay.jpg")
-    ph["fill_holes"] = fill_holes
-    info: dict = {"mask_url": ph["mask_url"], "overlay_url": ph["overlay_url"], "hand_url": ph.get("hand_url")}
-    try:
-        poly = contour.mask_to_polygon(mask, fill_holes)
-        info["contour_px"] = (a4.mm_to_rect_px(np.asarray(poly.exterior.coords)) * VIEW_SCALE).round(1).tolist()
-        # wenige, gut ziehbare Punkte für den Punkte-Editor (Abweichung <= 0,4 mm)
-        # Seitenansicht ruhiger (nur die Dicke zählt), Draufsicht genauer (Taschenkontur)
-        edit = np.asarray(poly.simplify(0.8 if view == "side" else 0.4).exterior.coords)[:-1]
-        ph["edit_contour_px"] = (a4.mm_to_rect_px(edit) * VIEW_SCALE).round(1).tolist()
-        info["edit_contour_px"] = ph["edit_contour_px"]
-        info["area_mm2"] = poly.area
-        x0, y0, x1, y1 = segment.paper_rect_px(0.5)
-        ys, xs = np.nonzero(mask)
-        info["touches_paper_edge"] = bool(xs.min() <= x0 or xs.max() >= x1 or ys.min() <= y0 or ys.max() >= y1)
-    except ValueError:
-        info["contour_px"] = []
-    storage.save_object(spec)
-    return info
-
-
-def _rect_of(spec: ObjectSpec, view: str) -> np.ndarray:
-    bgr, _, ph = _load(spec, view)
-    return a4.rectify(bgr, np.asarray(ph["corners_px"], np.float32))
 
 
 @router.post("/{oid}/photos/{view}/segment")
 def run_segment(oid: str, view: str, body: SegmentBody, user: Principal = Depends(current_user)) -> dict:
     _check_view(view)
     spec = _obj(oid, user)
-    ph = _photo(spec, view)
-    rect = _rect_of(spec, view)
-    ph["prompts"] = {"pos": body.pos, "neg": body.neg}
-    mask = segment.segment(rect, body.pos, body.neg, use_sam=body.use_sam, holes=body.fill_holes)
-    if mask.max() == 0:
-        raise HTTPException(422, "Kein Werkzeug gefunden. Ecken prüfen oder mit 'Auswählen' auf das Werkzeug klicken.")
-    hand_info: dict = {"hand_removed": False}
-    hand = np.zeros_like(mask) if view == "side" else None
-    ph.pop("cut_point_mm", None)
-    top_mask_f = storage.object_dir(oid) / "top_mask.png"
-
-    def top():   # Rückfallebene ohne SAM: Farbmodell aus der Draufsicht
-        if not (top_mask_f.exists() and "top" in spec.photos):
-            return None
-        return _rect_of(spec, "top"), cv2.imread(str(top_mask_f), cv2.IMREAD_GRAYSCALE)
-
-    if view == "side" and body.remove_hand:
-        res = hands.remove_hand_auto(rect, mask, top)
-        if res is not None and res.applied:
-            mask, hand = res.mask, res.hand
-            # Berührungspunkt Hand/Werkzeug (Papier-mm) -> verdecktes Ende fürs Profil
-            near = cv2.dilate(mask, np.ones((61, 61), np.uint8)) > 0
-            ys, xs = np.nonzero((hand > 0) & near)
-            if len(xs):
-                ph["cut_point_mm"] = a4.rect_px_to_mm([[float(xs.mean()), float(ys.mean())]])[0].tolist()
-            hand_info = {"hand_removed": True, "hand_frac": round(res.removed_frac, 3)}
-    info = _save_mask(spec, view, rect, mask, body.fill_holes, hand)
-    info.update(hand_info)
-    info["sam_used"] = bool(body.use_sam and segment.sam_available() and (body.pos or body.neg))
-    return info
+    try:
+        return scan.segment_view(spec, view, body.pos, body.neg, fill_holes=body.fill_holes, use_sam=body.use_sam,
+                                 remove_hand=body.remove_hand)
+    except ScanError as e:
+        raise _http(e) from None
 
 
 @router.put("/{oid}/photos/{view}/mask")
@@ -281,7 +161,10 @@ async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_ho
                       user: Principal = Depends(current_user)) -> dict:
     _check_view(view)
     spec = _obj(oid, user)
-    bgr, _, ph = _load(spec, view)
+    try:
+        bgr, _, ph = scan.load(spec, view)
+    except ScanError as e:
+        raise _http(e) from None
     raw = await _read_limited(file, MAX_MASK_BYTES)
     try:
         from io import BytesIO
@@ -295,17 +178,7 @@ async def upload_mask(oid: str, view: str, file: UploadFile = File(...), fill_ho
     if fill_holes:                       # gemalte/verschobene Kontur: keine Hohlräume im Werkzeug
         mask = segment.fill_holes(mask) * 255
     rect = a4.rectify(bgr, np.asarray(ph["corners_px"], np.float32))
-    return _save_mask(spec, view, rect, mask, fill_holes)
-
-
-FIT_VERSION = 2
-
-
-def _level_ref(measured, reliable) -> float:
-    """Höhe der Messung, die der tiefsten Ebene (z = 0) entspricht (wie in fit_levels gefiltert)."""
-    from scipy.ndimage import median_filter
-    z = median_filter(measured, size=9, mode="nearest")
-    return float(z[reliable].min()) if reliable.any() else float(z.min())
+    return scan.save_mask(spec, view, rect, mask, fill_holes)
 
 
 class LevelsBody(BaseModel):
@@ -328,7 +201,7 @@ def texture(oid: str, user: Principal = Depends(current_user)) -> dict:
         rect = cv2.imread(str(d / "top_rect_view.jpg"))
         mask = cv2.imread(str(d / "top_mask.png"), cv2.IMREAD_GRAYSCALE)
         try:
-            meta = make_texture(rect, float(ph.get("view_scale", VIEW_SCALE)), mask, spec.contour_mm, out)
+            meta = make_texture(rect, float(ph.get("view_scale", scan.VIEW_SCALE)), mask, spec.contour_mm, out)
         except ValueError as e:
             raise HTTPException(422, f"Textur nicht möglich: {e}") from e
         import json
@@ -370,61 +243,7 @@ def compute_profile(oid: str, body: ProfileBody, user: Principal = Depends(curre
         spec.side_flip_ud = body.side_flip_ud
     if body.calipers is not None:
         spec.calipers = {k: v for k, v in body.calipers.items() if v}
-    d = storage.object_dir(oid)
-    polys, poses = {}, {}
-    for view in ("top", "side"):
-        ph = _photo(spec, view)
-        if not (d / f"{view}_mask.png").exists():
-            raise HTTPException(409, f"Maske '{view}' fehlt")
-        mask = cv2.imread(str(d / f"{view}_mask.png"), cv2.IMREAD_GRAYSCALE)
-        try:
-            polys[view] = contour.mask_to_polygon(mask, ph.get("fill_holes", True))
-        except ValueError:
-            raise HTTPException(422, f"Der Umriss der {'Draufsicht' if view == 'top' else 'Seitenansicht'} ist leer oder ungültig.") from None
-        pj = ph["pose"]
-        poses[view] = pose.CameraPose(tuple(pj["C_mm"]), pj["f_px"], pj["f35_assumed"], tuple(pj["warnings"]))
     try:
-        g = profile.build_object(polys["top"], polys["side"], poses["top"], poses["side"], spec.side_flip_lr,
-                                 spec.side_flip_ud, spec.calipers, cut_point=spec.photos["side"].get("cut_point_mm"))
-    except (ValueError, IndexError) as e:
-        raise HTTPException(422, f"Profil konnte nicht berechnet werden ({e}). Bitte die Umrisse prüfen.") from e
-    ov = body.profile_overrides or {}
-    s_grid = g.profile.s
-    L = float(s_grid[-1])
-    # verdeckte/ergänzte Stellen (Hand) zählen nicht für die Ebenen, inklusive eines Saums daneben
-    reliable = ~np.asarray(g.profile.missing, bool)
-    if g.profile.cut and not reliable.all():
-        from scipy.ndimage import binary_dilation
-        reliable &= ~binary_dilation(~reliable, iterations=int(round(15.0 / profile.DS)))   # Handreste
-    # Neigung so, dass gerade Unterseiten waagrecht auf den Ebenen liegen (statt Tisch-Ruhelage)
-    k_tilt = profile.best_tilt(s_grid, g.profile.bottom, reliable)
-    measured = np.asarray(g.profile.bottom, float) + k_tilt * np.asarray(s_grid)
-    top_raw = np.asarray(g.profile.top, float) + k_tilt * np.asarray(s_grid)
-    zp = _level_ref(measured, reliable)       # Bezug: tiefster (gefilterter) Messpunkt = 0
-    # Ebenen aus älterer Auswertung (andere Neigung) passen nicht mehr: dann neu erkennen
-    old = spec.profile is not None and spec.profile.fit_version < FIT_VERSION
-    if body.levels and not old:               # Handkorrektur, im selben Bezug wie Messung/Oberseite
-        raw = profile.normalize_levels([[a, b, z] for a, b, z in body.levels], L, keep_ref=True)
-        zp += min(q[2] for q in raw)          # tiefere Ebene = Werkzeug dort dicker: alles mitschieben
-        lv = profile.normalize_levels(raw, L)
-    else:
-        lv = profile.fit_levels(s_grid, measured, reliable, count=body.level_count)
-    b_arr = profile.bottom_from_levels(s_grid, lv)
-    meas = measured - zp
-    t_arr = profile.smooth_top(s_grid, top_raw - zp, np.minimum(b_arr, meas))
-    bottom, top = b_arr.tolist(), t_arr.tolist()
-    for key, arr in (("bottom", bottom), ("top", top)):
-        if key in ov:
-            if len(ov[key]) != len(arr):
-                raise HTTPException(422, f"profile_overrides.{key}: Länge {len(arr)} erwartet")
-            arr[:] = ov[key]
-    spec.contour_mm = g.contour.round(3).tolist()
-    spec.length_mm, spec.width_mm = round(g.length, 2), round(g.width, 2)
-    spec.profile = Profile(ds=0.5, s=g.profile.s.round(3).tolist(), bottom=bottom, top=top,
-                           levels=lv, measured=np.round(meas, 2).tolist(), fit_version=FIT_VERSION)
-    spec.flip_lr_used = g.profile.flip_lr
-    spec.tilt_deg = round(g.profile.tilt_deg + float(np.degrees(np.arctan(k_tilt))), 2)
-    spec.warnings = g.warnings
-    spec.profile_missing = g.profile.missing.tolist()
-    storage.save_object(spec)
-    return spec
+        return scan.compute_profile(spec, body.levels, body.level_count, body.profile_overrides)
+    except ScanError as e:
+        raise _http(e) from None
