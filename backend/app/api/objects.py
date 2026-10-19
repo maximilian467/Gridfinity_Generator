@@ -69,6 +69,9 @@ class ProfileBody(BaseModel):
                       Field(min_length=1, max_length=8)] | None = None      # Ebenen [a, b, z] (Handkorrektur)
     level_count: int | None = Field(None, ge=1, le=5)                        # Anzahl Ebenen neu erkennen
     profile_overrides: dict[str, Annotated[list[float], Field(max_length=20000)]] | None = Field(None, max_length=2)
+    side_skipped: bool | None = None                                         # ohne Seitenfoto auswerten
+    thickness_mm: float | None = Field(None, ge=0.5, le=300)                 # Dicke von Hand (ohne Seitenfoto)
+    uniform_thickness: bool | None = None
 
 
 class NameBody(BaseModel):
@@ -243,6 +246,12 @@ def compute_profile(oid: str, body: ProfileBody, user: Principal = Depends(curre
         spec.side_flip_ud = body.side_flip_ud
     if body.calipers is not None:
         spec.calipers = {k: v for k, v in body.calipers.items() if v}
+    if body.side_skipped is not None:
+        spec.side_skipped = body.side_skipped
+    if body.thickness_mm is not None:
+        spec.thickness_mm = body.thickness_mm
+    if body.uniform_thickness is not None:
+        spec.uniform_thickness = body.uniform_thickness
     try:
         return scan.compute_profile(spec, body.levels, body.level_count, body.profile_overrides)
     except ScanError as e:

@@ -53,6 +53,7 @@ class Layout:
     z_surface: float
     total_height: float = 0.0                          # inkl. Stapelrand
     sink: list[float] = field(default_factory=list)    # je Platzierung: tatsächlicher Einsinkanteil
+    depth: list[float] = field(default_factory=list)   # je Platzierung: tatsächliche Taschentiefe (mm)
     pieces: list[Piece] = field(default_factory=list)
     grips: list[Grip] = field(default_factory=list)
     comps: list[Comp] = field(default_factory=list)
@@ -232,13 +233,14 @@ def _make_grip(g: GripRecess, pieces: list[Piece], zmin_all: float, auto=False, 
 
 def tool_depth(obj: ObjectSpec, spec: InsertSpec) -> tuple[float, float]:
     """Wie tief die tiefste Stelle des Werkzeugs unter der Oberfläche liegt (ohne Bodenabstand):
-    Einsinkanteil x Werkzeugdicke, mindestens so, dass jede Ebene 1 mm Tasche behält.
-    Rückgabe (Tiefe, kleinste sinnvolle Tiefe)."""
+    Einsinkanteil x Werkzeugdicke oder die Taschentiefe von Hand (depth_mm), mindestens so, dass
+    jede Ebene 1 mm Tasche behält. Rückgabe (Tiefe, kleinste sinnvolle Tiefe)."""
     prof = obj.profile
     T = max(prof.top)
     zmax = max((lv[2] for lv in prof.levels), default=0.0) if prof.levels else 0.0
     dmin = min(zmax + 1.0, T)
-    return max(spec.sink * T, dmin), dmin
+    want = spec.depth_mm if spec.depth_mm is not None else spec.sink * T
+    return max(want, dmin), dmin
 
 
 def _rock_warning(obj: ObjectSpec) -> str | None:
@@ -283,6 +285,10 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
         D, dmin = tool_depth(obj, spec)
         D = max(D - reduce, dmin)
         lay.sink.append(D / max(max(prof.top), 1e-6))
+        lay.depth.append(D)
+        if spec.depth_mm is not None and D > spec.depth_mm + 0.05:
+            lay.warnings.append(f"{obj.name}: Tasche {D:.1f} mm statt {spec.depth_mm:.1f} mm tief, "
+                                "damit jede Ebene des Taschenbodens mindestens 1 mm Tasche behält.")
         z_rest = zs - D + spec.overhang
         w = _rock_warning(obj)
         if w and w not in lay.warnings:
@@ -399,10 +405,15 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
         short = need - min((p.z0 for p in lay.pieces), default=1e9)
         if short > 1e-6 and spec.placements:
             lay = _assemble(spec, objects, gx, gy, u, reduce=short)
-            sink = min(lay.sink) if lay.sink else 0
-            lay.warnings.append(f"Bei {spec.height_mm:.0f} mm Gesamthöhe sinken die Werkzeuge nur "
-                                f"{sink * 100:.0f} % statt {spec.sink * 100:.0f} % ein. Dafür wären "
-                                f"{math.ceil(spec.height_mm + short)} mm Gesamthöhe nötig.")
+            if spec.depth_mm is not None:
+                lay.warnings.append(f"Bei {spec.height_mm:.0f} mm Gesamthöhe sind die Taschen nur "
+                                    f"{min(lay.depth):.1f} mm statt {spec.depth_mm:.1f} mm tief. Dafür wären "
+                                    f"{math.ceil(spec.height_mm + short)} mm Gesamthöhe nötig.")
+            else:
+                sink = min(lay.sink) if lay.sink else 0
+                lay.warnings.append(f"Bei {spec.height_mm:.0f} mm Gesamthöhe sinken die Werkzeuge nur "
+                                    f"{sink * 100:.0f} % statt {spec.sink * 100:.0f} % ein. Dafür wären "
+                                    f"{math.ceil(spec.height_mm + short)} mm Gesamthöhe nötig.")
         _clamp_to_height(lay, spec, need)
     elif spec.height_u is None:
         for u_ in range(1, 31):

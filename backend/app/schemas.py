@@ -37,6 +37,9 @@ class ObjectSpec(BaseModel):
     profile_missing: list[bool] = []
     calipers: dict[str, float] = {}
     warnings: list[str] = []
+    side_skipped: bool = False            # ohne Seitenfoto: ebene Unterseite, Dicke von Hand
+    thickness_mm: float | None = Field(None, ge=0.5, le=300)   # Dicke von Hand (nur ohne Seitenfoto)
+    uniform_thickness: bool = False       # überall gleich dick: Draufsicht mit dieser Dicke korrigieren
     photos: dict[str, dict] = {}
     owner_id: int | None = None           # setzt nur der Server
     project_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")   # im Projekt gescannt
@@ -111,6 +114,7 @@ class InsertSpec(BaseModel):
     height_u: int | None = Field(None, ge=1, le=30)
     height_mm: float | None = Field(None, ge=10, le=250)    # feste Gesamthöhe inkl. Stapelrand (hat Vorrang)
     sink: float = Field(0.65, ge=0.2, le=1.0)              # Werkzeug sinkt zu diesem Anteil seiner Dicke ein
+    depth_mm: float | None = Field(None, ge=1, le=200)     # Taschentiefe von Hand (hat Vorrang vor sink)
     stacking_lip: bool = True
     magnets: bool = False
     clearance_xy: float = Field(2.5, ge=0, le=10)
@@ -157,7 +161,7 @@ class BaseplateSpec(BaseModel):
 # ---- Projekte (Schublade als digitaler Klon) --------------------------------------
 
 # Felder einer Einlage, die die Projektvorlage vorgibt (Liste hier erweitern/kürzen genügt)
-TEMPLATE_FIELDS = ("height_mm", "sink", "stacking_lip", "magnets", "clearance_xy", "clearance_end", "clearance_z",
+TEMPLATE_FIELDS = ("height_mm", "sink", "depth_mm", "stacking_lip", "magnets", "clearance_xy", "clearance_end", "clearance_z",
                    "floor_min", "min_wall", "smooth_mm", "grip_width", "grip_overhang",
                    "grip_depth_below", "comp_min_size", "comp_wall", "comp_depth", "comp_follow", "color_hex",
                    "color_skin")
@@ -167,6 +171,7 @@ class InsertTemplate(BaseModel):
     """Mustervorlage: Grundeinstellungen aller Einlagen eines Projekts (Standardwerte wie InsertSpec)."""
     height_mm: float | None = Field(None, ge=10, le=250)
     sink: float = Field(0.65, ge=0.2, le=1.0)
+    depth_mm: float | None = Field(None, ge=1, le=200)
     stacking_lip: bool = True
     magnets: bool = False
     clearance_xy: float = Field(2.5, ge=0, le=10)

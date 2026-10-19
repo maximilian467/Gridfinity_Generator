@@ -60,6 +60,8 @@ def store_photo(spec: ObjectSpec, view: str, data: bytes, ext: str):
         raise ScanError("Bild nicht lesbar (beschädigt oder zu groß)") from None
     for old in d.glob(f"{view}_*"):
         old.unlink()
+    if view == "side":                    # neues Seitenfoto: wieder mit Seitenansicht auswerten
+        spec.side_skipped = False
     name = f"{view}_original{ext}"
     tmp.replace(d / name)
     h, w = bgr.shape[:2]
@@ -192,22 +194,63 @@ def _level_ref(measured, reliable) -> float:
     return float(z[reliable].min()) if reliable.any() else float(z.min())
 
 
+def _pose_of(ph: dict) -> pose.CameraPose:
+    """Kamerapose aus den gespeicherten Ecken neu schätzen (gleiche Ecken, aktuelle Rechnung) und ablegen."""
+    if ph.get("corners_px") and ph.get("size"):
+        w, h = ph["size"]
+        p = pose.estimate_pose(np.asarray(ph["corners_px"], np.float32), (h, w), ph.get("f35"))
+        ph["pose"] = {"C_mm": list(p.C_mm), "f_px": p.f_px, "f35_assumed": p.f35_assumed, "warnings": list(p.warnings)}
+        return p
+    pj = ph["pose"]
+    return pose.CameraPose(tuple(pj["C_mm"]), pj["f_px"], pj["f35_assumed"], tuple(pj["warnings"]))
+
+
+def _view_polygon(spec: ObjectSpec, view: str):
+    ph = photo(spec, view)
+    f = storage.object_dir(spec.id) / f"{view}_mask.png"
+    if not f.exists():
+        raise ScanError(f"Maske '{view}' fehlt", 409)
+    try:
+        return contour.mask_to_polygon(cv2.imread(str(f), cv2.IMREAD_GRAYSCALE), ph.get("fill_holes", True))
+    except ValueError:
+        raise ScanError(f"Der Umriss der {VIEW_NAMES[view]} ist leer oder ungültig.") from None
+
+
+def _profile_top_only(spec: ObjectSpec, levels=None) -> ObjectSpec:
+    """Ohne Seitenfoto: Kontur aus der Draufsicht, ebene Unterseite, Dicke von Hand."""
+    if not spec.thickness_mm:
+        raise ScanError("Ohne Seitenfoto wird die Dicke des Werkzeugs gebraucht.", 422)
+    poly = _view_polygon(spec, "top")
+    g = profile.build_top_only(poly, _pose_of(photo(spec, "top")), spec.thickness_mm, spec.uniform_thickness,
+                               spec.calipers)
+    s_grid = g.profile.s
+    L = float(s_grid[-1])
+    old = spec.profile is not None and spec.profile.measured is not None   # vorher mit Seitenfoto
+    lv = profile.normalize_levels(levels, L) if levels and not old else [[0.0, round(L, 1), 0.0]]
+    b_arr = profile.bottom_from_levels(s_grid, lv)
+    t_arr = np.maximum(float(spec.thickness_mm), b_arr + 0.5)
+    spec.contour_mm = g.contour.round(3).tolist()
+    spec.length_mm, spec.width_mm = round(g.length, 2), round(g.width, 2)
+    spec.profile = Profile(ds=0.5, s=s_grid.round(3).tolist(), bottom=b_arr.tolist(), top=t_arr.round(3).tolist(),
+                           levels=lv, measured=None, fit_version=FIT_VERSION)
+    spec.flip_lr_used = None
+    spec.tilt_deg = 0.0
+    spec.warnings = g.warnings
+    spec.profile_missing = [False] * len(s_grid)
+    storage.save_object(spec)
+    return spec
+
+
 def compute_profile(spec: ObjectSpec, levels=None, level_count: int | None = None,
                     profile_overrides: dict[str, list[float]] | None = None) -> ObjectSpec:
-    """Kontur und Höhenprofil aus beiden Masken (Spiegelung/Messschieber stehen schon in spec)."""
-    d = storage.object_dir(spec.id)
+    """Kontur und Höhenprofil aus beiden Masken (Spiegelung/Messschieber stehen schon in spec).
+    Ohne Seitenfoto (side_skipped) nur aus der Draufsicht mit der Dicke von Hand."""
+    if spec.side_skipped:
+        return _profile_top_only(spec, levels)
     polys, poses = {}, {}
     for view in ("top", "side"):
-        ph = photo(spec, view)
-        if not (d / f"{view}_mask.png").exists():
-            raise ScanError(f"Maske '{view}' fehlt", 409)
-        mask = cv2.imread(str(d / f"{view}_mask.png"), cv2.IMREAD_GRAYSCALE)
-        try:
-            polys[view] = contour.mask_to_polygon(mask, ph.get("fill_holes", True))
-        except ValueError:
-            raise ScanError(f"Der Umriss der {VIEW_NAMES[view]} ist leer oder ungültig.") from None
-        pj = ph["pose"]
-        poses[view] = pose.CameraPose(tuple(pj["C_mm"]), pj["f_px"], pj["f35_assumed"], tuple(pj["warnings"]))
+        polys[view] = _view_polygon(spec, view)
+        poses[view] = _pose_of(spec.photos[view])
     try:
         g = profile.build_object(polys["top"], polys["side"], poses["top"], poses["side"], spec.side_flip_lr,
                                  spec.side_flip_ud, spec.calipers, cut_point=spec.photos["side"].get("cut_point_mm"))
@@ -227,7 +270,8 @@ def compute_profile(spec: ObjectSpec, levels=None, level_count: int | None = Non
     top_raw = np.asarray(g.profile.top, float) + k_tilt * np.asarray(s_grid)
     zp = _level_ref(measured, reliable)       # Bezug: tiefster (gefilterter) Messpunkt = 0
     # Ebenen aus älterer Auswertung (andere Neigung) passen nicht mehr: dann neu erkennen
-    old = spec.profile is not None and spec.profile.fit_version < FIT_VERSION
+    # ebenso Ebenen aus der Auswertung ohne Seitenfoto (ohne Messung): die Seite liefert jetzt mehr
+    old = spec.profile is not None and (spec.profile.fit_version < FIT_VERSION or spec.profile.measured is None)
     if levels and not old:                    # Handkorrektur, im selben Bezug wie Messung/Oberseite
         raw = profile.normalize_levels([[a, b, z] for a, b, z in levels], L, keep_ref=True)
         zp += min(q[2] for q in raw)          # tiefere Ebene = Werkzeug dort dicker: alles mitschieben

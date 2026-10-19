@@ -40,6 +40,9 @@ export interface ObjectSpec {
   profile_missing: boolean[]
   calipers: Record<string, number>
   warnings: string[]
+  side_skipped?: boolean          // ohne Seitenfoto: ebene Unterseite, Dicke von Hand
+  thickness_mm?: number | null
+  uniform_thickness?: boolean
   photos: Record<string, PhotoMeta>
   project_id?: string | null
 }
@@ -58,6 +61,7 @@ export interface InsertSpec {
   height_u: number | null
   height_mm: number | null
   sink: number
+  depth_mm?: number | null     // Taschentiefe von Hand (Vorrang vor sink)
   stacking_lip: boolean
   magnets: boolean
   clearance_xy: number
@@ -92,7 +96,7 @@ export interface InsertSpec {
 
 export interface PolyOut { exterior: [number, number][]; holes: [number, number][][] }
 export interface LayoutOut {
-  grid_x: number; grid_y: number; height_u: number; z_surface: number; total_height: number; sink: number[]; outer: [number, number]
+  grid_x: number; grid_y: number; height_u: number; z_surface: number; total_height: number; sink: number[]; depth?: number[]; outer: [number, number]
   pieces: { placement: number; zone: number; z0: number; depth: number; polygons: PolyOut[] }[]
   grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean; params: GripRecess | null }[]
   compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; max_depth: boolean }[]
@@ -138,14 +142,14 @@ export interface AuditEntry { ts: string; actor: string; action: string; target:
 export interface PartColors { body: string; pocket: string; grip: string; compartment: string }
 
 /** Felder, die die Projektvorlage vorgibt (Spiegel: backend schemas.TEMPLATE_FIELDS) */
-export const TEMPLATE_FIELDS = ['height_mm', 'sink', 'stacking_lip', 'magnets', 'clearance_xy', 'clearance_end', 'clearance_z',
+export const TEMPLATE_FIELDS = ['height_mm', 'sink', 'depth_mm', 'stacking_lip', 'magnets', 'clearance_xy', 'clearance_end', 'clearance_z',
   'floor_min', 'min_wall', 'smooth_mm', 'grip_width', 'grip_overhang', 'grip_depth_below', 'comp_min_size',
   'comp_wall', 'comp_depth', 'comp_follow', 'color_hex', 'color_skin'] as const
 export type TemplateField = typeof TEMPLATE_FIELDS[number]
 export type InsertTemplate = Pick<InsertSpec, TemplateField> & { auto_grip: boolean }
 
 export const FIELD_LABELS: Record<TemplateField, string> = {
-  height_mm: 'Gesamthöhe', sink: 'Einsinktiefe', stacking_lip: 'Stapelrand', magnets: 'Magnetlöcher',
+  height_mm: 'Gesamthöhe', sink: 'Einsinktiefe', depth_mm: 'Taschentiefe', stacking_lip: 'Stapelrand', magnets: 'Magnetlöcher',
   clearance_xy: 'Spiel seitlich', clearance_end: 'Zusatzspiel an den Enden', clearance_z: 'Abstand Boden zu Werkzeug',
   floor_min: 'Min. Material unter Boden', min_wall: 'Min. Wand', smooth_mm: 'Kontur glätten',
   grip_width: 'Greifmulde Breite', grip_overhang: 'Greifmulde Überstand', grip_depth_below: 'Greifmulde Tiefe',

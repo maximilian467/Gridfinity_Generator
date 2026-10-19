@@ -481,10 +481,20 @@ function TemplateTab({ p, setTemplate }: { p: ProjectSpec; setTemplate: (t: Inse
         <div className="hint mt-0">Gilt für alle Einlagen des Projekts. Einlagen, in denen du einen Wert bewusst überschrieben hast, behalten ihren Wert.</div>
         <Check label="Höhe automatisch (je Einlage, dann evtl. unterschiedlich hoch)" checked={t.height_mm === null} onChange={(v) => up({ height_mm: v ? null : 32 })} />
         {t.height_mm !== null && <NumberField label="Gesamthöhe aller Einlagen" value={t.height_mm} step={1} min={10} onChange={(v) => up({ height_mm: v })} hint="gleiche Höhe für alle, inkl. Stapelrand" />}
-        <label className="grid gap-1">
-          <span className="label mb-0">Werkzeug sinkt ein <span className="num">{Math.round(t.sink * 100)} %</span></span>
-          <input type="range" min={30} max={100} step={5} value={Math.round(t.sink * 100)} onChange={(e) => up({ sink: +e.target.value / 100 })} />
-        </label>
+        <div className="grid gap-1">
+          <span className="label mb-0">Taschentiefe</span>
+          <Segmented value={t.depth_mm != null ? 'mm' : 'pct'} onChange={(v) => up({ depth_mm: v === 'mm' ? 15 : null })}
+            options={[{ value: 'pct', label: 'Anteil der Dicke' }, { value: 'mm', label: 'Eigene Tiefe' }]} />
+        </div>
+        {t.depth_mm == null ? (
+          <label className="grid gap-1">
+            <span className="label mb-0">Werkzeug sinkt ein <span className="num">{Math.round(t.sink * 100)} %</span></span>
+            <input type="range" min={30} max={100} step={5} value={Math.round(t.sink * 100)} onChange={(e) => up({ sink: +e.target.value / 100 })} />
+          </label>
+        ) : (
+          <NumberField label="Tiefe unter der Oberfläche" value={t.depth_mm} step={0.5} min={1} max={200} onChange={(v) => up({ depth_mm: v })}
+            hint="gleiche Taschentiefe für alle Werkzeuge" />
+        )}
         <Check label="Stapelrand" checked={t.stacking_lip} onChange={(v) => up({ stacking_lip: v })} />
         <Check label="Magnetlöcher" checked={t.magnets} onChange={(v) => up({ magnets: v })} />
       </section>

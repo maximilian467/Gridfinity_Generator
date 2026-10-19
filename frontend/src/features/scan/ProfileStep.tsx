@@ -6,7 +6,7 @@ import { ArrowsClockwise, ArrowsHorizontal, ArrowsVertical, Stack, Trash } from 
 import { api } from '../../lib/api'
 import { placeNew } from '../../lib/placement'
 import type { Level, ObjectSpec } from '../../lib/types'
-import { BusyBar, Msg, Msgs, NumberField, Segmented, Stat, errText } from '../../components/ui'
+import { BusyBar, Check, Msg, Msgs, NumberField, Segmented, Stat, errText } from '../../components/ui'
 
 const PAD = 28
 
@@ -21,8 +21,10 @@ interface BarProps {
   primary?: { label: string; onClick: () => void; disabled?: boolean; busy?: boolean }
 }
 
-export function ProfileStep({ o: obj, header, bar }: {
+/** topOnly: ohne Seitenfoto (Dicke von Hand, ebene Unterseite); onUseSide: zurück zur Seitenansicht */
+export function ProfileStep({ o: obj, header, bar, topOnly = false, onUseSide }: {
   o: ObjectSpec; i: number; header: (c: ReactNode) => ReactNode; bar: (p: BarProps) => ReactNode
+  topOnly?: boolean; onUseSide?: () => Promise<void>
 }) {
   const qc = useQueryClient()
   const nav = useNavigate()
@@ -30,13 +32,25 @@ export function ProfileStep({ o: obj, header, bar }: {
   const [flipUd, setFlipUd] = useState(obj.side_flip_ud)
   const [len, setLen] = useState(obj.calipers.length ?? 0)
   const [thick, setThick] = useState(obj.calipers.max_thickness ?? 0)
+  const [handThick, setHandThick] = useState(obj.thickness_mm ?? 0)
+  const [uniform, setUniform] = useState(!!obj.uniform_thickness)
+  const handOk = handThick >= 0.5
+  const back = useMutation({ mutationFn: async () => { await onUseSide?.() } })
   const [levels, setLevels] = useState<Level[]>(obj.profile?.levels ?? [])
   const [top, setTop] = useState<number[]>(obj.profile?.top ?? [])
   const [edited, setEdited] = useState(false)
   const [selLv, setSelLv] = useState<number | null>(null)
 
   const calc = useMutation({
-    mutationFn: (v: { levels?: Level[]; count?: number; lr?: typeof flipLr; ud?: boolean }) => api.profile(obj.id, {
+    mutationFn: (v: { levels?: Level[]; count?: number; lr?: typeof flipLr; ud?: boolean; uniform?: boolean }) => api.profile(obj.id, topOnly ? {
+      side_skipped: true,
+      thickness_mm: handThick,
+      uniform_thickness: v.uniform ?? uniform,
+      calipers: { length: len },
+      levels: v.levels,
+      level_count: v.count,
+    } : {
+      side_skipped: false,
       side_flip_lr: (v.lr ?? flipLr) === 'auto' ? null : (v.lr ?? flipLr) === 'yes',
       side_flip_ud: v.ud ?? flipUd,
       calipers: { length: len, max_thickness: thick },
@@ -48,8 +62,8 @@ export function ProfileStep({ o: obj, header, bar }: {
       setShown(null); setLevels(o.profile!.levels ?? []); setTop(o.profile!.top); setEdited(false)
     },
   })
-  // gespeicherte Ebenen behalten; ohne Ebenen (ältere Objekte) neu erkennen
-  useEffect(() => { calc.mutate({ levels: obj.profile?.levels ?? undefined }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // gespeicherte Ebenen behalten; ohne Ebenen (ältere Objekte) neu erkennen. Ohne Seitenfoto erst mit Dicke.
+  useEffect(() => { if (!topOnly || handOk) calc.mutate({ levels: obj.profile?.levels ?? undefined }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const setLv = useMutation({
     mutationFn: (l: Level[]) => api.setLevels(obj.id, l),
     onSuccess: (o) => {
@@ -105,26 +119,32 @@ export function ProfileStep({ o: obj, header, bar }: {
     },
     onSuccess: (r) => nav(r.project ? `/project/${r.project}` : `/insert/${r.id}`),
   })
-  const maxT = o.profile ? Math.max(...o.profile.top) : 0
+  // ohne Seitenfoto zählt erst ein Profil, das auch so berechnet wurde (nicht das alte mit Seitenansicht)
+  const ready = !!o.profile && (!topOnly || !!o.side_skipped)
+  const maxT = ready ? Math.max(...o.profile!.top) : 0
 
   return (
     <>
       <div className="p-6 grid grid-cols-[minmax(0,1fr)] gap-5">
-        {header('Aus beiden Umrissen entstehen die Maße und das Höhenprofil entlang der Länge. Perspektivische Verzerrung (Parallaxe) ist bereits herausgerechnet. Unten ist die Unterseite in der Lage, in der das Werkzeug später in der Tasche liegt.')}
+        {header(topOnly
+          ? 'Ohne Seitenansicht entstehen die Maße aus der Draufsicht und der Dicke, die du angibst. Der Taschenboden ist eben; Ebenen lassen sich unten trotzdem von Hand anlegen.'
+          : 'Aus beiden Umrissen entstehen die Maße und das Höhenprofil entlang der Länge. Perspektivische Verzerrung (Parallaxe) ist bereits herausgerechnet. Unten ist die Unterseite in der Lage, in der das Werkzeug später in der Tasche liegt.')}
         <div className="grid grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="grid grid-cols-[minmax(0,1fr)] gap-3 content-start min-w-0">
             {calc.isPending && <BusyBar label="Berechne Kontur und Profil …" />}
-            {o.profile ? (
+            {ready ? (
               <ProfileView obj={o} levels={levels} top={top} sel={selLv} onSelect={setSelLv} onInsert={insertAt}
+                title={topOnly ? 'Profil ohne Seitenfoto' : undefined}
                 onChange={(q) => { setLevels(q); setEdited(true) }} onCommit={commit} />
-            ) : <div className="skeleton h-80" />}
+            ) : topOnly && !calc.isPending ? <Msg kind="warn">Rechts die Dicke des Werkzeugs eintragen und übernehmen.</Msg>
+              : <div className="skeleton h-80" />}
             {calc.isError && <Msg kind="err">{errText(calc.error)}</Msg>}
             <div className="flex flex-wrap gap-4 text-sm" style={{ color: 'var(--ink-2)' }}>
               <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'var(--blue)' }} /> Ebenen des Taschenbodens</span>
-              <span className="inline-flex items-center gap-2"><span className="swatch" style={{ border: '1px dashed var(--ink-3)' }} /> gemessene Unterseite</span>
-              <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'var(--green)' }} /> liegt hier auf</span>
+              {!topOnly && <span className="inline-flex items-center gap-2"><span className="swatch" style={{ border: '1px dashed var(--ink-3)' }} /> gemessene Unterseite</span>}
+              {!topOnly && <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'var(--green)' }} /> liegt hier auf</span>}
               <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'var(--accent)' }} /> Oberseite (nur Gesamtdicke)</span>
-              <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'color-mix(in srgb, var(--err) 25%, transparent)' }} /> ergänzt (verdeckt)</span>
+              {!topOnly && <span className="inline-flex items-center gap-2"><span className="swatch" style={{ background: 'color-mix(in srgb, var(--err) 25%, transparent)' }} /> ergänzt (verdeckt)</span>}
             </div>
             <div className="hint mt-0">
               Jede Ebene liegt auf dem tiefsten Punkt ihres Abschnitts: das Werkzeug liegt auf allen Ebenen auf und kann nicht wippen.
@@ -132,24 +152,51 @@ export function ProfileStep({ o: obj, header, bar }: {
               Doppelklick auf eine Ebene = dort eigene Ebene (± 8 mm) anlegen, z. B. für den Griffschutz.
               Liegt das Werkzeug nur auf einer Seite auf (grüne Striche), die Ebene unter dem freien Teil anheben.
             </div>
-            <Msgs items={o.warnings} />
+            <Msgs items={ready ? o.warnings : []} />
           </div>
 
           <aside className="grid grid-cols-[minmax(0,1fr)] gap-4 content-start">
             <div className="grid grid-cols-2 gap-2">
-              <Stat k="Länge" v={o.length_mm.toFixed(1)} unit="mm" />
-              <Stat k="Breite" v={o.width_mm.toFixed(1)} unit="mm" />
+              <Stat k="Länge" v={ready ? o.length_mm.toFixed(1) : '–'} unit="mm" />
+              <Stat k="Breite" v={ready ? o.width_mm.toFixed(1) : '–'} unit="mm" />
               <Stat k="Max. Dicke" v={maxT.toFixed(1)} unit="mm" />
-              <Stat k="Kippwinkel" v={o.tilt_deg.toFixed(1)} unit="°" />
+              {!topOnly && <Stat k="Kippwinkel" v={o.tilt_deg.toFixed(1)} unit="°" />}
             </div>
+
+            {topOnly && (
+              <section className="grid grid-cols-[minmax(0,1fr)] gap-2">
+                <h2 className="sect flex items-center gap-2"><ArrowsVertical size={16} /> Dicke (ohne Seitenfoto)</h2>
+                <div className="hint mt-0">Dickste Stelle des Werkzeugs, wie es später in der Tasche liegt. Daraus folgen Taschentiefe und Höhe der Einlage.</div>
+                <NumberField label="Dicke des Werkzeugs" value={handThick} onChange={setHandThick} min={0.5} max={300} step={0.5} />
+                <Check label="Überall gleich dick" checked={uniform} onChange={(v) => { setUniform(v); if (handOk) calc.mutate({ uniform: v }) }} />
+                <div className="hint mt-0">
+                  {uniform
+                    ? 'Die Perspektive wird mit dieser Dicke herausgerechnet (z. B. Lineal, Schraubenschlüssel, Spachtel).'
+                    : 'Aus. Ist das Werkzeug nur stellenweise so dick, bleibt der Foto-Umriss: die Tasche wird an weit außen liegenden Enden etwas größer, aber nie zu klein.'}
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button className="btn btn-sm btn-primary" disabled={!handOk || calc.isPending}
+                    onClick={() => calc.mutate({ levels: ready && levels.length ? levels : undefined })}>
+                    <ArrowsClockwise size={14} /> Übernehmen</button>
+                  {onUseSide && <button className="btn btn-sm" onClick={() => back.mutate()} disabled={back.isPending}>{back.isPending ? 'Rechne mit Seitenfoto …' : 'Doch mit Seitenfoto'}</button>}
+                  {back.isError && <Msg kind="err">{errText(back.error)}</Msg>}
+                </div>
+              </section>
+            )}
 
             <section className="grid grid-cols-[minmax(0,1fr)] gap-2">
               <h2 className="sect flex items-center gap-2"><Stack size={16} /> Ebenen im Taschenboden</h2>
-              <div className="hint mt-0">Meist reichen 2 bis 3 (Zange: Backen, Griffschutz, Griffe). Wahl erkennt die Ebenen neu.</div>
-              <Segmented value={nLevels} onChange={(n) => { setSelLv(null); calc.mutate({ count: n }) }}
-                options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
-              <button className="btn btn-sm justify-self-start" onClick={() => { setSelLv(null); calc.mutate({}) }} disabled={calc.isPending}>
-                <ArrowsClockwise size={14} /> Automatisch erkennen</button>
+              {topOnly ? (
+                <div className="hint mt-0">Ohne Seitenfoto ist der Boden eben. Doppelklick auf die Ebene legt dort eine eigene Ebene an (± 8 mm), z. B. wenn ein Teil höher liegt.</div>
+              ) : (
+                <>
+                  <div className="hint mt-0">Meist reichen 2 bis 3 (Zange: Backen, Griffschutz, Griffe). Wahl erkennt die Ebenen neu.</div>
+                  <Segmented value={nLevels} onChange={(n) => { setSelLv(null); calc.mutate({ count: n }) }}
+                    options={[1, 2, 3, 4, 5].map((n) => ({ value: n, label: String(n) }))} />
+                  <button className="btn btn-sm justify-self-start" onClick={() => { setSelLv(null); calc.mutate({}) }} disabled={calc.isPending}>
+                    <ArrowsClockwise size={14} /> Automatisch erkennen</button>
+                </>
+              )}
               {selLv !== null && levels[selLv] && (
                 <div className="grid gap-2 p-2 rounded" style={{ background: 'var(--surface-2)' }}>
                   <div className="text-sm font-medium">Ebene {selLv + 1}: {levels[selLv][0].toFixed(0)} bis {levels[selLv][1].toFixed(0)} mm</div>
@@ -162,6 +209,7 @@ export function ProfileStep({ o: obj, header, bar }: {
                 </div>
               )}
             </section>
+            {!topOnly && <>
             <section className="grid grid-cols-[minmax(0,1fr)] gap-2">
               <h2 className="sect flex items-center gap-2"><ArrowsHorizontal size={16} /> Seitenfoto spiegeln</h2>
               <div className="hint mt-0">Stimmt die Spitze im Profil nicht mit der Spitze in der Draufsicht überein, hier umschalten.</div>
@@ -175,24 +223,25 @@ export function ProfileStep({ o: obj, header, bar }: {
               <Segmented value={flipUd ? 'b' : 'a'} onChange={(v) => { setFlipUd(v === 'b'); calc.mutate({ ud: v === 'b' }) }}
                 options={[{ value: 'a', label: 'Wie im Foto unten' }, { value: 'b', label: 'Umgedreht' }]} />
             </section>
+            </>}
             <section className="grid grid-cols-[minmax(0,1fr)] gap-2">
               <h2 className="sect">Mit Messschieber nachmessen (optional)</h2>
-              <div className="hint mt-0">Gemessene Werte skalieren Kontur und Profil. 0 = nicht verwenden.</div>
+              <div className="hint mt-0">{topOnly ? 'Gemessene Länge skaliert die Kontur.' : 'Gemessene Werte skalieren Kontur und Profil.'} 0 = nicht verwenden.</div>
               <div className="grid grid-cols-2 gap-2">
                 <NumberField label="Länge" value={len} onChange={setLen} min={0} />
-                <NumberField label="Max. Dicke" value={thick} onChange={setThick} min={0} />
+                {!topOnly && <NumberField label="Max. Dicke" value={thick} onChange={setThick} min={0} />}
               </div>
               <div className="flex gap-2 flex-wrap">
-                <button className="btn btn-sm" onClick={() => calc.mutate({ levels: levels.length ? levels : undefined })} disabled={calc.isPending}><ArrowsClockwise size={14} /> Übernehmen</button>
+                <button className="btn btn-sm" onClick={() => calc.mutate({ levels: ready && levels.length ? levels : undefined })} disabled={calc.isPending || (topOnly && !handOk)}><ArrowsClockwise size={14} /> Übernehmen</button>
               </div>
             </section>
           </aside>
         </div>
       </div>
       {bar({
-        status: calc.isPending || setLv.isPending ? 'Speichere Profil …' : edited ? 'Profil geändert …' : o.profile ? 'Objekt ist gespeichert.' : '',
+        status: calc.isPending || setLv.isPending ? 'Speichere Profil …' : edited ? 'Profil geändert …' : ready ? 'Objekt ist gespeichert.' : '',
         secondary: <button className="btn" onClick={() => nav('/')}>Zur Bibliothek</button>,
-        primary: { label: o.project_id ? 'Einlage nach Projektvorlage' : 'Einlage anlegen', onClick: () => newInsert.mutate(), disabled: !o.profile || calc.isPending, busy: newInsert.isPending },
+        primary: { label: o.project_id ? 'Einlage nach Projektvorlage' : 'Einlage anlegen', onClick: () => newInsert.mutate(), disabled: !ready || calc.isPending, busy: newInsert.isPending },
       })}
     </>
   )
@@ -201,8 +250,8 @@ export function ProfileStep({ o: obj, header, bar }: {
 /** Draufsicht + Seitenprofil. Die Unterseite besteht aus wenigen waagrechten Ebenen (Taschenboden
  *  in Stufen). Ebene ziehen = Höhe ändern, Absatz ziehen = Grenze verschieben, Klick = auswählen.
  *  Grau: gemessene Unterseite, grüne Striche: dort liegt das Werkzeug auf. Höhe überhöht. */
-function ProfileView({ obj, levels, top, sel, onSelect, onChange, onCommit, onInsert }: {
-  obj: ObjectSpec; levels: Level[]; top: number[]; sel: number | null
+function ProfileView({ obj, levels, top, sel, onSelect, onChange, onCommit, onInsert, title = 'Seitenprofil' }: {
+  obj: ObjectSpec; levels: Level[]; top: number[]; sel: number | null; title?: string
   onSelect: (i: number | null) => void; onInsert: (s: number) => void
   onChange: (l: Level[]) => void; onCommit: (l: Level[]) => void
 }) {
@@ -300,7 +349,7 @@ function ProfileView({ obj, levels, top, sel, onSelect, onChange, onCommit, onIn
         ))}
         {dim(x(0), x(L), hTop - 14, `${obj.length_mm.toFixed(1)} mm`)}
 
-        <text x={PAD} y={hTop + 16} fontSize={12} fontWeight={600} fill="var(--ink)">Seitenprofil (Höhe {EX}-fach überhöht)</text>
+        <text x={PAD} y={hTop + 16} fontSize={12} fontWeight={600} fill="var(--ink)">{title} (Höhe {EX}-fach überhöht)</text>
         {runs.map(([a, b]) => (
           <rect key={a} x={x(p.s[a])} width={Math.max(2, x(p.s[b]) - x(p.s[a]))} y={yProf(tMax) - 4} height={(tMax - zMin) * kz + 8}
             fill="color-mix(in srgb, var(--err) 18%, transparent)" />

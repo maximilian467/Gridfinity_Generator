@@ -53,6 +53,36 @@ def render(poly_xy, height, cam, seed=0, noise=3.0, bg=70, tool=35):
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
+def render_prisms(prisms, cam, seed=0, noise=3.0, bg=70, tool=35):
+    """Mehrere Prismen [(Grundfläche Papier-mm, z_unten, z_oben), ...] in einer Farbe, z. B. Bürste
+    aus flachem Stiel und hohem Borstenkopf."""
+    K, rvec, t, _ = cam
+    rng = np.random.default_rng(seed)
+    img = np.full((IMG_H, IMG_W, 3), bg, np.uint8)
+    paper = project(K, rvec, t, [[0, 0, 0], [A4_W, 0, 0], [A4_W, A4_H, 0], [0, A4_H, 0]])
+    cv2.fillConvexPoly(img, np.round(paper).astype(np.int32), (235, 238, 240), cv2.LINE_AA)
+    col = (tool, tool, tool + 5)
+    for poly_xy, z0, z1 in prisms:
+        poly_xy = np.asarray(poly_xy, float)
+        n = len(poly_xy)
+        pb = project(K, rvec, t, np.hstack([poly_xy, -np.full((n, 1), float(z0))]))
+        pt = project(K, rvec, t, np.hstack([poly_xy, -np.full((n, 1), float(z1))]))
+        for i in range(n):
+            j = (i + 1) % n
+            cv2.fillPoly(img, [np.round([pb[i], pb[j], pt[j], pt[i]]).astype(np.int32)], col, cv2.LINE_AA)
+        cv2.fillPoly(img, [np.round(pb).astype(np.int32)], col, cv2.LINE_AA)
+        cv2.fillPoly(img, [np.round(pt).astype(np.int32)], col, cv2.LINE_AA)
+    gx = np.linspace(0.9, 1.05, IMG_W)[None, :, None]
+    img = np.clip(img.astype(np.float32) * gx, 0, 255)
+    img = cv2.GaussianBlur(img, (0, 0), 1.2)
+    img += rng.normal(0, noise, img.shape)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def rect(x0, y0, x1, y1):
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float)
+
+
 def rot_rect(cx, cy, l, w, deg):
     a = np.radians(deg)
     R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])

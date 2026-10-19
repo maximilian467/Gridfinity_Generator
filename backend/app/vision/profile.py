@@ -229,9 +229,14 @@ def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, si
         side_c = correct_polygon(side_poly, side_pose, f_side, side_s_of_x(f_side, side_c, flip_lr, length),
                                  lambda s: np.zeros_like(s), lambda s, g=grid, w=wp: np.interp(s, g, w))
         prof = side_profile(side_c, length, flip_lr, flip_ud, pca_frame(side_c), cut_point)
+        # Oberseite hier mit dem Minimum der Umgebung: Seiten- und Draufsicht liegen entlang s nur auf
+        # wenige mm genau übereinander. Mit dem Maximum zählte z. B. der hohe Borstenkopf einer Bürste
+        # bis ans Holzende, die Korrektur fraß das ganze Ende weg (Tasche zu kurz). Weniger Korrektur
+        # heißt nur etwas mehr Spiel. Vorher ±1 mm Maximum: einzelne Randspalten (Kantenpixel) sind zu flach.
         top_c = correct_polygon(top_poly, top_pose, f_top, top_s_of_x(f_top, top_c),
                                 lambda s, p=prof: np.interp(s, p.s, minimum_filter1d(p.bottom, win, mode="nearest")),
-                                lambda s, p=prof: np.interp(s, p.s, maximum_filter1d(p.top, win, mode="nearest")))
+                                lambda s, p=prof: np.interp(s, p.s, minimum_filter1d(
+                                    maximum_filter1d(p.top, 5, mode="nearest"), win, mode="nearest")))
         top_c_frame = pca_frame(top_c)
 
     # Plausibilität: unbrauchbares Seitenprofil (z. B. Hand im Umriss) darf die Draufsicht nicht zerstören
@@ -274,6 +279,38 @@ def build_object(top_poly: Polygon, side_poly: Polygon, top_pose: CameraPose, si
         prof.missing = np.zeros(len(grid), bool)
         prof.s = grid
     return ObjectGeometry(contour, L, W, prof, warns)
+
+
+def build_top_only(top_poly: Polygon, top_pose: CameraPose, thickness: float, uniform: bool = False,
+                   calipers: dict | None = None) -> ObjectGeometry:
+    """Ohne Seitenfoto: Umriss aus der Draufsicht, ebene Unterseite, Dicke von Hand.
+    Die Höhenverteilung ist unbekannt. Nur wenn das Werkzeug überall gleich dick ist (uniform),
+    wird die Parallaxe mit dieser Dicke herausgerechnet; sonst bleibt der Foto-Umriss (nie zu klein,
+    an den Enden etwas mehr Spiel). Mit der vollen Dicke überall würden dünne Teile weit draußen
+    zu kurz (Schraubendreher: Klinge neben dickem Griff)."""
+    warns: list[str] = []
+    top_c = top_poly
+    if uniform and thickness > 0:
+        f = pca_frame(top_poly)
+        top_c = correct_polygon(top_poly, top_pose, f, lambda x: np.asarray(x, float),
+                                lambda s: np.zeros_like(s), lambda s: np.full(np.shape(s), float(thickness)))
+    loc = polygon_local(top_c, pca_frame(top_c))
+    contour = np.asarray(loc.exterior.coords)[:-1]
+    L = float(contour[:, 0].max() - contour[:, 0].min())
+    W = float(contour[:, 1].max() - contour[:, 1].min())
+    calipers = calipers or {}
+    if calipers.get("length"):
+        k = calipers["length"] / L
+        contour, L, W = contour * k, L * k, W * k
+    grid = np.arange(0, L + DS / 2, DS)
+    n = len(grid)
+    prof = SideProfile(grid, np.zeros(n), np.full(n, float(thickness)), np.zeros(n, bool), 1.0, 0.0,
+                       pca_frame(top_poly), False, False)
+    prof.side_length = L
+    warns.append(f"Ohne Seitenfoto: Unterseite eben, Dicke {thickness:.1f} mm von Hand"
+                 + ("" if uniform else ", Perspektive nicht herausgerechnet (etwas mehr Spiel)"))
+    warns += list(top_pose.warnings)
+    return ObjectGeometry(contour, L, W, prof, list(dict.fromkeys(warns)))
 
 
 # ---- Unterseite als Stützpunkte -----------------------------------------------------------

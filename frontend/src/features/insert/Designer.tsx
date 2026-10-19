@@ -27,7 +27,7 @@ function bake(sp: InsertSpec, dx: number, dy: number): InsertSpec {
 const round1 = (v: number) => Math.round(v * 10) / 10
 /** Wert für die Rückfrage lesbar machen */
 function fmt(f: string, v: unknown): string {
-  if (v === null || v === undefined) return 'automatisch'
+  if (v === null || v === undefined) return f === 'depth_mm' ? 'Anteil der Dicke' : 'automatisch'
   if (typeof v === 'boolean') return v ? 'an' : 'aus'
   if (typeof v === 'number') return f === 'sink' ? `${Math.round(v * 100)} %` : `${Math.round(v * 10) / 10} mm`
   return 'geändert'
@@ -333,13 +333,26 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <NumberField label="Höhe" unit="U (7 mm)" step={1} min={1} value={spec.height_u} onChange={(v) => patch({ height_u: Math.round(v) })} />
           )}
           {lay && <div className="num hint">{lay.grid_x} x {lay.grid_y} Einheiten, {lay.total_height.toFixed(1)} mm hoch</div>}
-          <label className="grid gap-1 mt-1">
-            <span className="label mb-0">Werkzeug sinkt ein <span className="num">{Math.round(spec.sink * 100)} %</span>
-              {lay && lay.sink.length > 0 && Math.min(...lay.sink) < spec.sink - 0.01 && <span className="num" style={{ color: 'var(--warn)' }}> (bei dieser Höhe {Math.round(Math.min(...lay.sink) * 100)} %)</span>}
-            </span>
-            <input type="range" min={30} max={100} step={5} value={Math.round(((pending?.p.sink as number | undefined) ?? spec.sink) * 100)} onChange={(e) => patch({ sink: +e.target.value / 100 })} />
-            <span className="hint mt-0">Anteil der Werkzeugdicke, der in der Tasche verschwindet. 50 bis 75 % lässt sich gut greifen, 100 % = bündig.</span>
-          </label>
+          <div className="grid gap-1 mt-1">
+            <span className="label mb-0">Taschentiefe</span>
+            <Segmented value={spec.depth_mm != null ? 'mm' : 'pct'}
+              onChange={(v) => patch({ depth_mm: v === 'mm' ? Math.round((lay?.depth?.[0] ?? 15) * 2) / 2 : null })}
+              options={[{ value: 'pct', label: 'Anteil der Dicke' }, { value: 'mm', label: 'Eigene Tiefe' }]} />
+          </div>
+          {spec.depth_mm == null ? (
+            <label className="grid gap-1">
+              <span className="label mb-0">Werkzeug sinkt ein <span className="num">{Math.round(spec.sink * 100)} %</span>
+                {lay && lay.sink.length > 0 && Math.min(...lay.sink) < spec.sink - 0.01 && <span className="num" style={{ color: 'var(--warn)' }}> (bei dieser Höhe {Math.round(Math.min(...lay.sink) * 100)} %)</span>}
+              </span>
+              <input type="range" min={30} max={100} step={5} value={Math.round(((pending?.p.sink as number | undefined) ?? spec.sink) * 100)} onChange={(e) => patch({ sink: +e.target.value / 100 })} />
+              <span className="hint mt-0">Anteil der Werkzeugdicke, der in der Tasche verschwindet. 50 bis 75 % lässt sich gut greifen, 100 % = bündig.
+                {lay?.depth?.length ? <> Tasche dadurch <span className="num">{lay.depth.map((d) => d.toFixed(1).replace('.', ',')).join(' / ')} mm</span> tief.</> : null}</span>
+            </label>
+          ) : (
+            <NumberField label="Tiefe unter der Oberfläche" step={0.5} min={1} max={200}
+              value={(pending?.p.depth_mm as number | undefined) ?? spec.depth_mm} onChange={(v) => patch({ depth_mm: v })}
+              hint="So tief liegt die tiefste Stelle jedes Werkzeugs unter der Oberfläche (dazu kommt der Bodenabstand). Gilt für alle Werkzeuge dieser Einlage." />
+          )}
           <Check label="Stapelrand" checked={spec.stacking_lip} onChange={(v) => patch({ stacking_lip: v })} />
           <Check label="Magnetlöcher" checked={spec.magnets} onChange={(v) => patch({ magnets: v })} />
         </section>

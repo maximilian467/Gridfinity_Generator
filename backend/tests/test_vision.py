@@ -74,6 +74,33 @@ def test_parallax_box_dimensions():
     assert g.profile.bottom.min() == 0.0
 
 
+def test_parallax_brush_keeps_full_length():
+    """Bürste: flacher Stiel (10 mm) und hoher Borstenkopf (30 mm, 2,5 mm vom Ende eingerückt) weit
+    außerhalb der Bildmitte. Die Korrektur darf das Ende nicht kürzen, nur weil der Kopf daneben hoch
+    ist (früher: Tasche zu kurz, die Bürste passte nicht)."""
+    from tests.synth import rect, render_prisms
+    L, T_head, T_stick, W_head, W_stick = 200.0, 30.0, 10.0, 24.0, 16.0
+    x0, yc = 45.0, 100.0                                  # Kopf links, Kamera über der Blattmitte
+    top_parts = [(rect(x0, yc - W_head / 2, x0 + 110, yc + W_head / 2), 0, T_stick),
+                 (rect(x0 + 110, yc - W_stick / 2, x0 + L, yc + W_stick / 2), 0, T_stick),
+                 (rect(x0 + 2.5, yc - W_head / 2, x0 + 107.5, yc + W_head / 2), T_stick, T_head)]
+    # Seitenfoto: auf der Schmalkante stehend, Profil als Grundfläche, Höhe = Breite
+    side_parts = [(rect(x0, yc, x0 + 110, yc + T_stick), 0, W_head),
+                  (rect(x0 + 110, yc, x0 + L, yc + T_stick), 0, W_stick),
+                  (rect(x0 + 2.5, yc - (T_head - T_stick), x0 + 107.5, yc), 0, W_head)]
+    out = []
+    for k, parts in enumerate((top_parts, side_parts)):
+        cam = camera(height=380, offset=(0, 0))
+        img = render_prisms(parts, cam, seed=5 + k)
+        c = find_a4_corners(img)
+        out.append((mask_to_polygon(segment(rectify(img, c))), estimate_pose(c, img.shape, F35)))
+    (top, tp), (side, sp) = out
+    g = build_object(top, side, tp, sp)
+    assert g.length >= L - 0.4                       # nie zu kurz (früher 197,7 mm)
+    assert g.length <= L + 3.0                       # am Kopfende lieber etwas Spiel als zu knapp
+    assert g.profile.top.max() == pytest.approx(T_head, abs=1.0)
+
+
 def test_raw_side_thickness_is_wrong_without_correction():
     """Gegenprobe: Die unkorrigierte Silhouette des stehenden Körpers ist messbar zu dick."""
     from app.vision.contour import pca_frame, polygon_local

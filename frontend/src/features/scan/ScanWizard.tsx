@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router'
 import {
-  ArrowLeft, ArrowRight, Camera, CheckCircle, Circle, CornersOut, Crop, Lightbulb, LockSimple, Ruler, UploadSimple,
+  ArrowLeft, ArrowRight, Camera, CheckCircle, Circle, CornersOut, Crop, Lightbulb, LockSimple, MinusCircle, Ruler, UploadSimple,
 } from '@phosphor-icons/react'
 import { api, type SegmentResult } from '../../lib/api'
 import type { ObjectSpec, PhotoMeta } from '../../lib/types'
@@ -25,40 +25,49 @@ const STEPS: StepDef[] = [
   { group: 'Ergebnis', title: 'Profil und Maße', kind: 'profile' },
 ]
 
-function stepDone(o: ObjectSpec, i: number): boolean {
+const PROFILE_STEP = STEPS.length - 1
+
+/** skip: ohne Seitenansicht (gespeichert oder gerade gewählt, noch ohne Dicke) */
+function stepDone(o: ObjectSpec, i: number, skip = false): boolean {
   const s = STEPS[i]
-  if (s.kind === 'profile') return !!o.profile && !!o.photos.side
+  if (s.kind === 'profile') return !!o.profile && (!!o.photos.side || (skip && !!o.side_skipped))
+  if (skip && s.view === 'side') return true
   const ph = s.view ? o.photos[s.view] : undefined
   if (s.kind === 'upload') return !!ph
   if (s.kind === 'corners') return !!ph?.rectified_url
   return !!ph?.mask_url
 }
-function stepOpen(o: ObjectSpec, i: number): boolean {
-  return i === 0 || stepDone(o, i - 1)
+function stepOpen(o: ObjectSpec, i: number, skip = false): boolean {
+  return i === 0 || stepDone(o, i - 1, skip)
 }
 
 export function ScanWizard() {
   const { id = '' } = useParams()
   const obj = useQuery({ queryKey: ['object', id], queryFn: () => api.object(id) })
   const [step, setStep] = useState<number | null>(null)
+  const [skipLocal, setSkipLocal] = useState<boolean | null>(null)
 
   if (obj.isPending) return <div className="p-6"><div className="skeleton h-96 max-w-[1300px] mx-auto" /></div>
   if (obj.isError) return <div className="p-6 max-w-[900px] mx-auto"><Msg kind="err">{errText(obj.error)}</Msg></div>
   const o = obj.data
-  const firstOpen = STEPS.findIndex((_, i) => !stepDone(o, i))
-  const cur = step ?? (firstOpen === -1 ? 6 : firstOpen)
+  const skip = skipLocal ?? !!o.side_skipped
+  const firstOpen = STEPS.findIndex((_, i) => !stepDone(o, i, skip))
+  const cur = step ?? (firstOpen === -1 ? PROFILE_STEP : firstOpen)
+  const side = { skip, setSkip: (v: boolean) => { setSkipLocal(v); if (v) setStep(PROFILE_STEP) } }
 
   return (
     <div className="grid lg:grid-cols-[272px_minmax(0,1fr)] min-h-[calc(100dvh-56px)]">
-      <StepRail o={o} cur={cur} onGo={setStep} />
+      <StepRail o={o} cur={cur} onGo={setStep} skip={skip} />
       <section className="min-w-0 flex flex-col">
-        <StepBody key={cur} o={o} i={cur} go={setStep} />
+        <StepBody key={cur} o={o} i={cur} go={setStep} side={side} />
       </section>
     </div>
   )
 }
 
-function StepRail({ o, cur, onGo }: { o: ObjectSpec; cur: number; onGo: (i: number) => void }) {
+interface SideChoice { skip: boolean; setSkip: (v: boolean) => void }
+
+function StepRail({ o, cur, onGo, skip }: { o: ObjectSpec; cur: number; onGo: (i: number) => void; skip: boolean }) {
   const qc = useQueryClient()
   const [name, setName] = useState(o.name)
   const save = () => name.trim() && name !== o.name &&
@@ -73,15 +82,17 @@ function StepRail({ o, cur, onGo }: { o: ObjectSpec; cur: number; onGo: (i: numb
       </div>
       <nav aria-label="Schritte" className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
         {STEPS.map((s, i) => {
-          const done = stepDone(o, i), open = stepOpen(o, i), active = i === cur
+          const skipped = skip && s.view === 'side'
+          const done = stepDone(o, i, skip), open = skipped || stepOpen(o, i, skip), active = i === cur
           const head = s.group !== lastGroup ? (lastGroup = s.group) : null
           return (
             <div key={i}>
-              {head && <div className="text-xs font-semibold mt-3 mb-1" style={{ color: 'var(--ink-3)' }}>{head}</div>}
+              {head && <div className="text-xs font-semibold mt-3 mb-1" style={{ color: 'var(--ink-3)' }}>{head}{skipped && s.kind === 'upload' ? ' (übersprungen)' : ''}</div>}
               <button disabled={!open && !done} onClick={() => onGo(i)} aria-current={active ? 'step' : undefined}
                 className="w-full flex items-center gap-2.5 px-2 py-2 rounded text-left border-0 cursor-pointer disabled:cursor-not-allowed"
-                style={{ background: active ? 'var(--accent-soft)' : 'transparent', color: !open && !done ? 'var(--ink-3)' : 'var(--ink)', font: 'inherit' }}>
-                {done ? <CheckCircle size={18} weight="fill" color="var(--ok)" />
+                style={{ background: active ? 'var(--accent-soft)' : 'transparent', color: (!open && !done) || skipped ? 'var(--ink-3)' : 'var(--ink)', font: 'inherit' }}>
+                {skipped ? <MinusCircle size={18} />
+                  : done ? <CheckCircle size={18} weight="fill" color="var(--ok)" />
                   : !open ? <LockSimple size={18} /> : <Circle size={18} weight={active ? 'bold' : 'regular'} color={active ? 'var(--accent)' : undefined} />}
                 <span className={active ? 'font-semibold' : ''}>{s.title}</span>
               </button>
@@ -127,14 +138,40 @@ function ActionBar({ onBack, primary, secondary, status }: {
   )
 }
 
-function StepBody({ o, i, go }: { o: ObjectSpec; i: number; go: (i: number) => void }) {
+const SIDE_UPLOAD = STEPS.findIndex((s) => s.view === 'side' && s.kind === 'upload')
+
+function StepBody({ o, i, go, side }: { o: ObjectSpec; i: number; go: (i: number) => void; side: SideChoice }) {
   const s = STEPS[i]
   const qc = useQueryClient()
   const refresh = () => qc.invalidateQueries({ queryKey: ['object', o.id] })
-  if (s.kind === 'upload') return <UploadStep o={o} i={i} view={s.view!} onDone={() => { refresh(); go(i + 1) }} go={go} />
+  if (s.kind === 'upload') {
+    return <UploadStep o={o} i={i} view={s.view!} go={go} onSkip={s.view === 'side' && o.photos.top?.mask_url ? () => side.setSkip(true) : undefined}
+      onDone={() => { refresh(); if (s.view === 'side') side.setSkip(false); go(i + 1) }} />
+  }
   const ph = o.photos[s.view ?? 'top']
   if (s.kind === 'corners' && ph) return <CornersStep o={o} i={i} view={s.view!} photo={ph} refresh={refresh} go={go} />
   if (s.kind === 'mask' && ph?.rectified_url) return <MaskStep o={o} i={i} view={s.view!} photo={ph} refresh={refresh} go={go} />
+  if (s.kind === 'profile' && side.skip) {
+    if (!o.photos.top?.mask_url) {
+      return (
+        <div className="p-6 grid grid-cols-[minmax(0,1fr)] gap-4">
+          <StepHeader i={i} icon={<Ruler size={26} />}>Ohne Seitenansicht entstehen die Maße aus der Draufsicht und der Dicke, die du angibst.</StepHeader>
+          <Msg kind="warn">Dafür wird zuerst der Umriss der Draufsicht gebraucht.</Msg>
+          <ActionBar onBack={() => go(0)} />
+        </div>
+      )
+    }
+    const useSide = async () => {
+      if (o.photos.side?.mask_url) {                         // Seitenfoto schon ausgewertet: damit rechnen
+        const n = await api.profile(o.id, { side_skipped: false })
+        qc.setQueryData(['object', o.id], n)
+        side.setSkip(false)
+      } else { side.setSkip(false); go(SIDE_UPLOAD) }
+    }
+    return <ProfileStep key="top-only" o={o} i={i} topOnly onUseSide={useSide}
+      header={(c) => <StepHeader i={i} icon={<Ruler size={26} />}>{c}</StepHeader>}
+      bar={(p) => <ActionBar onBack={() => go(SIDE_UPLOAD)} {...p} />} />
+  }
   if (s.kind === 'profile') {
     if (!o.photos.top?.mask_url || !o.photos.side?.mask_url) {
       return (
@@ -169,7 +206,9 @@ const TIPS: Record<View, string[]> = {
   ],
 }
 
-function UploadStep({ o, i, view, onDone, go }: { o: ObjectSpec; i: number; view: View; onDone: () => void; go: (i: number) => void }) {
+function UploadStep({ o, i, view, onDone, go, onSkip }: {
+  o: ObjectSpec; i: number; view: View; onDone: () => void; go: (i: number) => void; onSkip?: () => void
+}) {
   const input = useRef<HTMLInputElement>(null)
   const [drag, setDrag] = useState(false)
   const ph = o.photos[view]
@@ -203,6 +242,19 @@ function UploadStep({ o, i, view, onDone, go }: { o: ObjectSpec; i: number; view
             <ol className="m-0 pl-5 grid gap-2" style={{ color: 'var(--ink-2)' }}>
               {TIPS[view].map((t) => <li key={t}>{t}</li>)}
             </ol>
+            {view === 'side' && (
+              <div className="grid gap-2 pt-3" style={{ borderTop: '1px solid var(--line)' }}>
+                <h2 className="sect">Ohne Seitenansicht</h2>
+                <div className="hint mt-0">
+                  Für flache Werkzeuge reicht die Draufsicht: du gibst die Dicke an, der Taschenboden wird eben.
+                  Ohne Seitenfoto gibt es keine Stufen, die dem Werkzeug folgen.
+                </div>
+                <button className="btn justify-self-start" disabled={!onSkip} onClick={onSkip}
+                  title={onSkip ? undefined : 'Zuerst den Umriss der Draufsicht erstellen'}>
+                  Ohne Seitenansicht weiter <ArrowRight size={16} />
+                </button>
+              </div>
+            )}
           </aside>
         </div>
       </div>

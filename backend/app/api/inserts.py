@@ -37,7 +37,7 @@ def layout_payload(spec: InsertSpec, user: Principal) -> dict:
     ox, oy = lay.outer
     return {
         "grid_x": lay.grid_x, "grid_y": lay.grid_y, "height_u": lay.height_u, "z_surface": lay.z_surface,
-        "total_height": lay.total_height, "sink": lay.sink,
+        "total_height": lay.total_height, "sink": lay.sink, "depth": lay.depth,
         "outer": [ox, oy],
         "pieces": [{"placement": p.placement, "zone": p.zone, "z0": p.z0, "depth": lay.z_surface - p.z0,
                     "polygons": _polys(p.poly)} for p in lay.pieces],

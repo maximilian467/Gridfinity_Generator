@@ -28,7 +28,11 @@ def intrinsics(shape_hw, f35: float | None) -> tuple[np.ndarray, bool]:
     h, w = shape_hw[:2]
     assumed = f35 is None
     f35 = DEFAULT_F35 if assumed else f35
-    f_px = f35 * float(np.hypot(w, h)) / SENSOR_DIAG_35
+    # KB-Brennweite bezieht sich auf die Diagonale des ganzen Sensors (Handy: 4:3). 16:9-Fotos sind
+    # oben/unten beschnitten, ihre Diagonale ist kürzer: sonst wird die Kamera zu tief geschätzt
+    # und die Parallaxe zu stark herausgerechnet (Tasche zu klein).
+    diag = max(float(np.hypot(w, h)), 1.25 * max(w, h))
+    f_px = f35 * diag / SENSOR_DIAG_35
     K = np.array([[f_px, 0, w / 2], [0, f_px, h / 2], [0, 0, 1]], np.float64)
     return K, assumed
 
