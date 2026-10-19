@@ -324,11 +324,6 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
     return lay
 
 
-def _content(lay: Layout):
-    polys = [p.poly for p in lay.pieces] + [g.poly for g in lay.grips] + [c.poly for c in lay.comps]
-    return unary_union(polys) if polys else None
-
-
 def _translate_layout(lay: Layout, dx: float, dy: float) -> None:
     for p in lay.pieces:
         p.poly = affinity.translate(p.poly, dx, dy)
@@ -343,10 +338,12 @@ def _translate_layout(lay: Layout, dx: float, dy: float) -> None:
 def _center(lay: Layout) -> None:
     # Mitte nur aus Taschen und Mulden: Fächer füllen die Restfläche und wandern nur mit
     # (sonst verschiebt jedes erzeugte Fach die Mitte und damit alle anderen Fächer)
+    # Ohne Werkzeug (Fächer-Einlage) bleibt alles, wo es ist: sonst rückten beim Löschen eines
+    # Fachs alle anderen nach.
     polys = [p.poly for p in lay.pieces] + [g.poly for g in lay.grips]
-    u = unary_union(polys) if polys else _content(lay)
-    if u is None:
+    if not polys:
         return
+    u = unary_union(polys)
     x0, y0, x1, y1 = u.bounds
     ix0, iy0, ix1, iy1 = lay.inner.bounds
     _translate_layout(lay, (ix0 + ix1) / 2 - (x0 + x1) / 2, (iy0 + iy1) / 2 - (y0 + y1) / 2)
@@ -496,6 +493,47 @@ def auto_compartments(lay: Layout, spec: InsertSpec, max_n: int = 10, grow: floa
     return out
 
 
+GRID_MIN_SIDE = 6.0      # schmalere Fächer lassen sich weder greifen noch sauber drucken
+
+
+def grid_compartments(lay: Layout, spec: InsertSpec, cols: int, rows: int, radius: float = 3.0) -> list:
+    """Innenbereich gleichmäßig in cols x rows Fächer teilen (Fächer-Einlage, Sortierkasten).
+    Zwischen den Fächern bleibt die Wandstärke comp_wall stehen; liegen Taschen, Mulden oder andere
+    Fächer im Weg, endet ein Fach mit Wandabstand davor. Layout-Koordinaten (nach Zentrierung)."""
+    wall = max(spec.comp_wall, 0.8)
+    x0, y0, x1, y1 = lay.inner.bounds
+    cw = (x1 - x0 - (cols - 1) * wall) / cols
+    ch = (y1 - y0 - (rows - 1) * wall) / rows
+    if min(cw, ch) < GRID_MIN_SIDE:
+        raise ValueError(f"Bei {cols} x {rows} Fächern wären sie schmaler als {GRID_MIN_SIDE:.0f} mm. "
+                         "Weniger Fächer wählen oder die Einlage vergrößern.")
+    occupied = [p.poly for p in lay.pieces] + [g.poly for g in lay.grips] + [c.poly for c in lay.comps]
+    free = lay.inner
+    if occupied:
+        free = free.difference(unary_union(occupied).buffer(wall + 0.15, join_style=1))
+    r = max(min(radius, cw / 2 - 0.01, ch / 2 - 0.01), 0.01)
+    out = []
+    for j in range(rows):
+        for i in range(cols):
+            cx0, cy0 = x0 + i * (cw + wall), y0 + j * (ch + wall)
+            cell = box(cx0, cy0, cx0 + cw, cy0 + ch)
+            if occupied:
+                parts = [p for p in _polys(cell.intersection(free)) if p.area > 1]
+                if not parts:
+                    continue
+                cell = max(parts, key=lambda p: p.area)
+            cell = cell.buffer(-r, join_style=1).buffer(r, join_style=1, quad_segs=8)   # Ecken runden
+            parts = _polys(cell)
+            if not parts:
+                continue
+            cell = max(parts, key=lambda p: p.area)
+            bx0, by0, bx1, by1 = cell.bounds
+            if min(bx1 - bx0, by1 - by0) < GRID_MIN_SIDE:
+                continue
+            out.append(cell.simplify(0.02))
+    return out
+
+
 def _check(lay: Layout, spec: InsertSpec) -> None:
     inner = lay.inner
     items = [("Tasche", p.poly) for p in lay.pieces] + [("Mulde", g.poly) for g in lay.grips] \
@@ -518,7 +556,7 @@ def _check(lay: Layout, spec: InsertSpec) -> None:
 
 
 __all__ = ["Layout", "Piece", "Grip", "Comp", "compute_layout", "pocket_outline", "grip_polygon",
-           "comp_polygon", "auto_compartments", "balance_point", "MultiPolygon"]
+           "comp_polygon", "auto_compartments", "grid_compartments", "balance_point", "MultiPolygon"]
 
 
 

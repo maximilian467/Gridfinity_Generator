@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rows, Scan, SignOut, Trash, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rows, Scan, SignOut, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec, TemplateField } from '../../lib/types'
 import { FIELD_LABELS } from '../../lib/types'
@@ -11,6 +11,7 @@ import { ChunkGuard } from '../../components/ChunkGuard'
 import { PlateBuild, PlateSettings, toggleCells, usePlatePlan } from '../baseplate/Baseplate'
 import { PITCH, PlateEditor } from '../baseplate/PlateEditor'
 import { BatchScan } from './BatchScan'
+import { NewBinForm } from '../insert/NewBinForm'
 
 const Clone3D = lazy(() => import('./Clone3D').then((m) => ({ default: m.Clone3D })))
 
@@ -385,6 +386,16 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
   const assign = useMutation({ mutationFn: (v: { kind: 'insert' | 'object'; id: string; member: boolean }) => api.assign(p.id, v.kind, v.id, v.member), onSuccess: done })
   const gen = useMutation({ mutationFn: (oid: string) => api.generate(p.id, [oid], true), onSuccess: done })
   const [batch, setBatch] = useState(() => { try { return !!sessionStorage.getItem(`batch-scan:${p.id}`) } catch { return false } })
+  const [binForm, setBinForm] = useState(false)
+  const [binMsg, setBinMsg] = useState<{ kind: 'ok' | 'info'; text: string } | null>(null)
+  // neue Fächer-Einlage gleich in einen freien Platz der Schublade legen
+  const binCreated = async (i: { id: string; name: string }) => {
+    setBinForm(false)
+    const r = await api.arrange(p.id, 'missing').catch(() => null)
+    setBinMsg(r?.placed.includes(i.id) ? { kind: 'ok', text: `${i.name} angelegt und in die Schublade gelegt.` }
+      : { kind: 'info', text: `${i.name} angelegt. In der Schublade ist dafür gerade kein Platz, sie liegt noch draußen.` })
+    done()
+  }
   return (
     <div className="grid gap-6">
       <section className="grid gap-3">
@@ -436,7 +447,11 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
               {otherIns.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
           )}
+          <button className={`btn ${binForm ? 'btn-on' : ''}`} onClick={() => { setBinForm((v) => !v); setBinMsg(null) }}
+            title="Einlage ohne Werkzeug, nur mit Fächern (Sortierkasten)"><SquaresFour size={16} /> Fächer-Einlage</button>
         </div>
+        {binForm && <NewBinForm projectId={p.id} defaultHeight={p.template.height_mm} onCancel={() => setBinForm(false)} onCreated={binCreated} />}
+        {binMsg && <Msg kind={binMsg.kind} onClose={() => setBinMsg(null)}>{binMsg.text}</Msg>}
         <div className="panel divide-y" style={{ borderColor: 'var(--line)' }}>
           {!data?.inserts.length && <div className="p-3 hint mt-0">Noch keine Einlagen.</div>}
           {data?.inserts.map((i) => (

@@ -75,6 +75,11 @@ export const api = {
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/rect`, json('POST', { spec, x0, y0, x1, y1 })),
   compartmentAt: (spec: InsertSpec, x: number, y: number) =>
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/at`, json('POST', { spec, x, y })),
+  compartmentGrid: (spec: InsertSpec, cols: number, rows: number) =>
+    req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/grid`, json('POST', { spec, cols, rows })),
+  /** Fächer-Einlage ohne Werkzeug (Sortierkasten); height_mm null = Standardhöhe bzw. Projektvorlage */
+  createBin: (b: { name: string; grid_x: number; grid_y: number; cols: number; rows: number; height_mm: number | null; project_id?: string | null }) =>
+    req<InsertSpec>('/inserts/bin', json('POST', b)),
 
   projects: (all = false, archived = false) => req<ProjectSpec[]>(`/projects?all=${all}&archived=${archived}`),
   project: (id: string) => req<ProjectSpec>(`/projects/${id}`),

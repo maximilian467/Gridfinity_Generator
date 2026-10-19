@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Archive, Copy, Cube, FolderSimple, Plus, Scan, Trash } from '@phosphor-icons/react'
+import { Archive, Copy, Cube, FolderSimple, Plus, Scan, SquaresFour, Trash } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import { Check, Empty, Msg, NumberField, Segmented, Silhouette, errText } from '../../components/ui'
-import type { ProjectSpec } from '../../lib/types'
+import type { InsertSpec, ProjectSpec } from '../../lib/types'
+import { NewBinForm } from '../insert/NewBinForm'
 
 function Projects({ showAll }: { showAll: boolean }) {
   const nav = useNavigate()
@@ -74,6 +75,12 @@ function Projects({ showAll }: { showAll: boolean }) {
   )
 }
 
+/** Inhalt einer Einlage für die Liste: Werkzeuge, sonst Fächer (Fächer-Einlage). */
+function contents(i: InsertSpec): string {
+  if (i.placements.length || !i.compartments.length) return `${i.placements.length} Objekt(e)`
+  return `${i.compartments.length} ${i.compartments.length === 1 ? 'Fach' : 'Fächer'}`
+}
+
 export function Library() {
   const nav = useNavigate()
   const qc = useQueryClient()
@@ -101,6 +108,7 @@ export function Library() {
     mutationFn: () => api.createInsert({ name: 'Neue Einlage' }),
     onSuccess: (i) => nav(`/insert/${i.id}`),
   })
+  const [binForm, setBinForm] = useState(false)
   const delObj = useMutation({ mutationFn: api.deleteObject, onSuccess: refresh })
   const delIns = useMutation({ mutationFn: api.deleteInsert, onSuccess: refresh })
   const dupIns = useMutation({ mutationFn: api.duplicateInsert, onSuccess: refresh })
@@ -176,19 +184,26 @@ export function Library() {
       <section className="grid gap-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-semibold tracking-tight">Einlagen</h1>
-          <button className="btn btn-primary" onClick={() => newInsert.mutate()} disabled={newInsert.isPending}>
-            <Plus size={16} /> Neue Einlage
-          </button>
+          <div className="flex gap-2">
+            <button className={`btn ${binForm ? 'btn-on' : ''}`} onClick={() => setBinForm((v) => !v)} title="Einlage ohne Werkzeug, nur mit Fächern (Sortierkasten)">
+              <SquaresFour size={16} /> Neue Fächer-Einlage
+            </button>
+            <button className="btn btn-primary" onClick={() => newInsert.mutate()} disabled={newInsert.isPending}>
+              <Plus size={16} /> Neue Einlage
+            </button>
+          </div>
         </div>
+        {binForm && <NewBinForm onCancel={() => setBinForm(false)}
+          onCreated={(i) => { qc.invalidateQueries({ queryKey: ['inserts'] }); nav(`/insert/${i.id}`) }} />}
         {inserts.isPending ? (
           <div className="skeleton h-16" />
         ) : !inserts.data?.length ? (
-          <Empty title="Noch keine Einlagen">Lege eine Einlage an und platziere ein gescanntes Objekt darin.</Empty>
+          <Empty title="Noch keine Einlagen">Lege eine Einlage an und platziere ein gescanntes Objekt darin, oder lege eine Fächer-Einlage ohne Werkzeug an.</Empty>
         ) : (
           <div className="panel divide-y" style={{ borderColor: 'var(--line)' }}>
             {inserts.data.filter((i) => match(i.project_id)).map((i) => (
               <div key={i.id} className="flex items-center gap-3 px-3 py-2">
-                <Cube size={18} />
+                {i.placements.length || !i.compartments.length ? <Cube size={18} /> : <SquaresFour size={18} />}
                 <button className="font-medium text-left flex-1 truncate bg-transparent border-0 cursor-pointer p-0"
                   style={{ color: 'var(--ink)', font: 'inherit', fontWeight: 500 }} onClick={() => nav(`/insert/${i.id}`)}>
                   {i.name}
@@ -196,7 +211,7 @@ export function Library() {
                 {foreign(i.owner_id) && <span className="chip text-xs">anderer Nutzer</span>}
                 {pname(i.project_id) && <button className="chip text-xs cursor-pointer" onClick={() => nav(`/project/${i.project_id}`)}><FolderSimple size={12} /> {pname(i.project_id)}</button>}
                 <span className="num text-xs" style={{ color: 'var(--ink-2)' }}>
-                  {i.grid_x ?? 'auto'} x {i.grid_y ?? 'auto'} · {i.height_mm ? `${i.height_mm} mm` : i.height_u ? `${i.height_u} U` : 'Höhe auto'} · {i.placements.length} Objekt(e)
+                  {i.grid_x ?? 'auto'} x {i.grid_y ?? 'auto'} · {i.height_mm ? `${i.height_mm} mm` : i.height_u ? `${i.height_u} U` : 'Höhe auto'} · {contents(i)}
                 </span>
                 <button className="btn btn-sm btn-quiet" aria-label="Duplizieren" onClick={() => dupIns.mutate(i.id)}><Copy size={14} /></button>
                 <button className="btn btn-sm btn-quiet" aria-label="Löschen"

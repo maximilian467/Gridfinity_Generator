@@ -186,10 +186,18 @@ def generate(pid: str, body: GenerateBody, user: Principal = Depends(current_use
     return res
 
 
+def _check_ready(ins: InsertSpec, objs: dict) -> None:
+    """Einlage lässt sich berechnen: Werkzeuge fertig gescannt; ohne Werkzeug nur als
+    Fächer-Einlage (mit Fächern)."""
+    if not ins.placements and not ins.compartments:
+        raise ValueError("Einlage ist leer (kein Werkzeug, keine Fächer)")
+    if any(o.profile is None or not o.contour_mm for o in objs.values()):
+        raise ValueError("Werkzeug noch nicht fertig gescannt")
+
+
 def _footprint(ins: InsertSpec, user: Principal) -> tuple[int, int, float, dict]:
     objs = storage.objects_for(ins, user)
-    if not ins.placements or any(o.profile is None or not o.contour_mm for o in objs.values()):
-        raise ValueError("Werkzeug noch nicht fertig gescannt")
+    _check_ready(ins, objs)
     lay = compute_layout(ins, objs)
     return lay.grid_x, lay.grid_y, lay.total_height, objs
 
@@ -266,8 +274,7 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
                 "placed": pos[ins.id].model_dump() if ins.id in pos else None, "error": None}
         try:
             objs = storage.objects_for(ins, user)
-            if not ins.placements or any(o.profile is None or not o.contour_mm for o in objs.values()):
-                raise ValueError("Werkzeug noch nicht fertig gescannt")
+            _check_ready(ins, objs)
             lay = compute_layout(ins, objs)
             from shapely.ops import unary_union
 

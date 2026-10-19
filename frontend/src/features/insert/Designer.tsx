@@ -229,6 +229,13 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
     setTimeout(() => genComps.mutate(), 400)
   }
   const nGenerated = spec.compartments.filter((c) => c.generated).length
+  // Fächer-Raster: Fläche in Spalten x Reihen gleich große Fächer teilen (ersetzt die erzeugten Kästen)
+  const [grid, setGrid] = useState({ cols: 2, rows: 2 })
+  const gridComps = useMutation({
+    mutationFn: () => api.compartmentGrid({ ...spec, auto_compartments: false }, grid.cols, grid.rows),
+    onSuccess: (r) => { setCompMsg(null); patch({ auto_compartments: false, compartments: r.compartments }); select(null) },
+  })
+  const hasContent = spec.placements.length > 0 || spec.compartments.length > 0
 
   // Entf-Taste löscht das ausgewählte Element
   useEffect(() => {
@@ -359,14 +366,23 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             </div>
             <div className="flex gap-2 flex-wrap">
               <button className={`btn btn-sm ${tool?.kind === 'box' ? 'btn-on' : ''}`} onClick={() => setTool(tool?.kind === 'box' ? null : { kind: 'box' })}
-                disabled={!spec.placements.length} title="Begrenzung des Kastens als Linie zeichnen, z. B. ein L vom Rand zur Werkzeugspitze und hoch zum Rand"><Plus size={14} /> Kasten zeichnen</button>
-              <button className="btn btn-sm" onClick={() => genComps.mutate()} disabled={genComps.isPending || !spec.placements.length}>
+                title="Begrenzung des Kastens als Linie zeichnen, z. B. ein L vom Rand zur Werkzeugspitze und hoch zum Rand"><Plus size={14} /> Kasten zeichnen</button>
+              <button className="btn btn-sm" onClick={() => genComps.mutate()} disabled={genComps.isPending}>
                 <SquaresFour size={14} /> Automatisch füllen</button>
             </div>
             <Check label="Kastenwand folgt der Werkzeugkontur" checked={spec.comp_follow} onChange={(v) => patch({ comp_follow: v })} />
             <div className="hint mt-0">Kasten zeichnen: die Begrenzung als Linie ziehen, z. B. ein L vom linken Rand bis zur Werkzeugspitze und hoch zum oberen Rand.
               Der Kasten füllt die Ecke bis an das Werkzeug. Der nächste Kasten daneben bekommt automatisch eine Wand dazwischen.
               Kasten anklicken: löschen (Entf) oder gerade teilen.</div>
+            <div className="text-sm font-medium mt-1">Fächer-Raster</div>
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField label="Nebeneinander" unit="" step={1} min={1} max={12} value={grid.cols} onChange={(v) => setGrid((q) => ({ ...q, cols: Math.min(Math.max(Math.round(v) || 1, 1), 12) }))} />
+              <NumberField label="Hintereinander" unit="" step={1} min={1} max={12} value={grid.rows} onChange={(v) => setGrid((q) => ({ ...q, rows: Math.min(Math.max(Math.round(v) || 1, 1), 12) }))} />
+            </div>
+            <button className="btn btn-sm justify-self-start" onClick={() => gridComps.mutate()} disabled={gridComps.isPending}>
+              <SquaresFour size={14} /> In {grid.cols * grid.rows} {grid.cols * grid.rows === 1 ? 'Fach' : 'Fächer'} teilen</button>
+            <div className="hint mt-0">Teilt die Einlage gleichmäßig, wie ein Sortierkasten. Ersetzt die erzeugten Kästen; mit Werkzeug enden die Fächer mit Wandabstand davor.</div>
+            {gridComps.isError && <Msg kind="err">{errText(gridComps.error)}</Msg>}
             {nGenerated > 0 && <button className="btn btn-sm justify-self-start" onClick={clearComps}><Trash size={14} /> Alle {nGenerated} Kästen entfernen</button>}
             {compAt.isError && <Msg kind="err">{errText(compAt.error)}</Msg>}
             {genComps.isError && <Msg kind="err">{errText(genComps.error)}</Msg>}
@@ -438,7 +454,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip} title="Greifmulde automatisch am Schwerpunkt setzen"><Plus size={14} /> Greifmulde</button>
             <button className={`btn btn-sm ${tool?.kind === 'box' ? 'btn-on' : ''}`} onClick={() => setTool(tool?.kind === 'box' ? null : { kind: 'box' })}
-              disabled={!spec.placements.length} title="Begrenzung des Kastens als Linie zeichnen, z. B. ein L vom Rand zur Werkzeugspitze und hoch zum Rand"><Plus size={14} /> Kasten zeichnen</button>
+              title="Begrenzung des Kastens als Linie zeichnen, z. B. ein L vom Rand zur Werkzeugspitze und hoch zum Rand"><Plus size={14} /> Kasten zeichnen</button>
 
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
@@ -450,13 +466,14 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
         {tab === 'layout' && (
           <>
-            {usable.length === 0 && objects.isSuccess && (
+            {usable.length === 0 && objects.isSuccess && !hasContent && (
               <Msg kind="warn">Es gibt noch kein fertig gescanntes Objekt. In der Bibliothek ein Objekt scannen oder die Demo-Zange anlegen.
                 <button className="btn btn-sm ml-2" onClick={() => nav('/')}>Zur Bibliothek</button></Msg>
             )}
             {layout.isError && <Msg kind="err">{errText(layout.error)}</Msg>}
-            {spec.placements.length === 0 && usable.length > 0 && (
-              <Msg kind="info">Noch kein Werkzeug in dieser Einlage. Oben über "Objekt hinzufügen" ein gescanntes Werkzeug wählen.</Msg>
+            {!hasContent && usable.length > 0 && (
+              <Msg kind="info">Noch kein Werkzeug in dieser Einlage. Oben über "Objekt hinzufügen" ein gescanntes Werkzeug wählen,
+                oder links unter „Fächer-Raster“ die Einlage ohne Werkzeug in Fächer teilen.</Msg>
             )}
             {compAt.isError && <Msg kind="err">{errText(compAt.error)}</Msg>}
             {compCut.isError && !tool && <Msg kind="err">{errText(compCut.error)}</Msg>}
@@ -518,7 +535,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               ) : (
                 <>
                   <div className="max-w-[48ch]" style={{ color: 'var(--ink-2)' }}>Das echte 3D-Modell (Tasche, Stufen, Farbteile, Gridfinity-Füße) wird auf dem Server berechnet und anschließend auf Fehler geprüft.</div>
-                  <button className="btn btn-primary" onClick={() => build.mutate()} disabled={!spec.placements.length}>3D erzeugen</button>
+                  <button className="btn btn-primary" onClick={() => build.mutate()} disabled={!hasContent}>3D erzeugen</button>
                 </>
               )}
               {job.data?.status === 'error' && <Msg kind="err">{job.data.error}</Msg>}
@@ -549,19 +566,19 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         <section className="grid gap-2">
           <h3 className="sect">Export</h3>
           <div className="hint mt-0">1. Modell erzeugen, 2. Dateien laden. Zuerst den Passform-Test drucken, um das Spiel zu prüfen.</div>
-          <button className="btn btn-primary justify-center" disabled={build.isPending || job.data?.status === 'running' || !spec.placements.length || warnings.some((w) => /Innenbereich/.test(w))}
+          <button className="btn btn-primary justify-center" disabled={build.isPending || job.data?.status === 'running' || !hasContent || warnings.some((w) => /Innenbereich/.test(w))}
             onClick={() => build.mutate()}>
             <ArrowClockwise size={16} /> {job.data?.status === 'running' ? 'Erzeuge …' : job.data?.status === 'done' ? 'Neu erzeugen' : '3D erzeugen'}
           </button>
           {warnings.some((w) => /Innenbereich/.test(w)) && <div className="hint mt-0">Erst möglich, wenn alle Taschen in der Einlage liegen.</div>}
-          {!spec.placements.length && <div className="hint mt-0">Zuerst ein Objekt hinzufügen.</div>}
+          {!hasContent && <div className="hint mt-0">Zuerst ein Objekt hinzufügen oder die Einlage in Fächer teilen.</div>}
           {(job.data?.status === 'running' || build.isPending) && <BusyBar label="Berechne …" />}
           {build.isError && <Msg kind="err">{errText(build.error)}</Msg>}
           {job.data?.status === 'error' && <Msg kind="err">{job.data.error}</Msg>}
           {job.data?.status === 'done' && (
             <>
               <div className="grid gap-1">
-                {OUTPUT_LABELS.filter(([k]) => job.data!.outputs[k]).map(([k, label, fn]) => (
+                {OUTPUT_LABELS.filter(([k]) => job.data!.outputs[k] && (k !== 'fit_test' || spec.placements.length > 0)).map(([k, label, fn]) => (
                   <a key={k} className="btn justify-between no-underline" style={{ color: 'var(--ink)' }}
                     href={job.data!.outputs[k]} download={fn}>
                     <span>{label}</span><DownloadSimple size={16} />

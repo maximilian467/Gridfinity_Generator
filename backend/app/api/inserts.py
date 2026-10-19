@@ -122,6 +122,66 @@ def create(spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertS
     return storage.create_insert(spec, user)
 
 
+class BinBody(BaseModel):
+    name: str = Field("Fächer-Einlage", max_length=120)
+    grid_x: int = Field(2, ge=1, le=12)
+    grid_y: int = Field(2, ge=1, le=12)
+    cols: int = Field(2, ge=1, le=12)          # Fächer nebeneinander (x)
+    rows: int = Field(2, ge=1, le=12)          # Fächer hintereinander (y)
+    height_mm: float | None = Field(None, ge=10, le=250)   # None = Standardhöhe bzw. Projektvorlage
+    project_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")
+
+
+def grid_comps(spec: InsertSpec, cols: int, rows: int, user: Principal) -> list:
+    """cols x rows gleich große Fächer; ersetzt die erzeugten Kästen, eigene bleiben."""
+    from shapely import affinity
+
+    from ..geometry.layout import grid_compartments
+    from ..schemas import Compartment
+
+    keep = [c for c in spec.compartments if not c.generated]
+    lay = compute_layout(spec.model_copy(update={"auto_compartments": False, "compartments": keep}),
+                         storage.objects_for(spec, user))
+    try:
+        polys = grid_compartments(lay, spec, cols, rows)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    if not polys:
+        raise HTTPException(422, "Kein freier Platz für Fächer")
+    depth = round(spec.comp_depth, 1) if spec.comp_depth else None
+    out = []
+    for poly in polys:
+        p = affinity.translate(poly, -lay.shift[0], -lay.shift[1])      # Spec-Koordinaten
+        x0, y0, x1, y1 = p.bounds
+        out.append(Compartment(x=x0, y=y0, w=x1 - x0, l=y1 - y0, depth=depth, generated=True,
+                               polygon=[[round(a, 2), round(b, 2)] for a, b in p.exterior.coords]))
+    return keep + out
+
+
+@router.post("/bin", response_model=InsertSpec)
+def create_bin(body: BinBody, user: Principal = Depends(current_user)) -> InsertSpec:
+    """Fächer-Einlage (Sortierkasten) ohne Werkzeug: festes Raster, Fläche in cols x rows Fächer
+    geteilt. Höhe wie bei jeder neuen Einlage (Standardhöhe bzw. Projektvorlage), außer sie ist
+    angegeben; im Projekt gilt sie dann als eigener Wert."""
+    kw: dict = {"name": body.name.strip() or "Fächer-Einlage", "grid_x": body.grid_x, "grid_y": body.grid_y,
+                "auto_grip": False, "auto_center": False, "project_id": body.project_id}
+    if body.height_mm is not None:
+        kw["height_mm"] = body.height_mm
+        if body.project_id:
+            try:
+                tpl_h = storage.load_project(body.project_id, user).template.height_mm
+            except KeyError:
+                raise HTTPException(404, "Projekt nicht gefunden") from None
+            if tpl_h != body.height_mm:
+                kw["overrides"] = ["height_mm"]
+    spec = InsertSpec(**kw)
+    grid_comps(spec, body.cols, body.rows, user)          # Fächergröße prüfen, bevor etwas angelegt wird
+    ins = create(spec, user)
+    ins = ins.model_copy(update={"compartments": grid_comps(ins, body.cols, body.rows, user)})
+    storage.save_insert(ins)
+    return ins
+
+
 @router.get("", response_model=list[InsertSpec])
 def list_(all: bool = False, user: Principal = Depends(current_user)) -> list[InsertSpec]:
     return storage.list_inserts(user, all_=all)
@@ -195,6 +255,20 @@ def auto_compartments(iid: str, spec: InsertSpec | None = None, user: Principal 
                   "Die Einlage ist zu knapp: Raster vergrößern oder die Mindestgröße senken.")
     return {"compartments": [c.model_dump() for c in out], "reason": reason,
             "grid": [lay.grid_x, lay.grid_y]}
+
+
+class CompGrid(BaseModel):
+    spec: InsertSpec
+    cols: int = Field(ge=1, le=12)
+    rows: int = Field(ge=1, le=12)
+
+
+@router.post("/{iid}/compartments/grid")
+def compartment_grid(iid: str, body: CompGrid, user: Principal = Depends(current_user)) -> dict:
+    """Fläche in cols x rows gleich große Fächer teilen (ersetzt die erzeugten Kästen)."""
+    spec = _body_spec(iid, body.spec, user)
+    layout_payload(spec, user)
+    return {"compartments": [c.model_dump() for c in grid_comps(spec, body.cols, body.rows, user)]}
 
 
 class CompEdit(BaseModel):
