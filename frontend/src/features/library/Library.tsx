@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Archive, Copy, Cube, FolderSimple, Plus, Rectangle, Scan, SquaresFour, Trash } from '@phosphor-icons/react'
+import { Archive, Copy, Cube, FolderSimple, Plus, Rectangle, Scan, SquaresFour, Trash, UsersThree } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import { Check, Empty, Msg, NumberField, Segmented, Silhouette, errText } from '../../components/ui'
 import type { InsertSpec, ProjectSpec } from '../../lib/types'
@@ -13,8 +13,9 @@ function Projects({ showAll }: { showAll: boolean }) {
   const qc = useQueryClient()
   const [archive, setArchive] = useState(false)
   const projects = useQuery({ queryKey: ['projects', showAll ? 'all' : 'mine', archive ? 'archived' : 'active'], queryFn: () => api.projects(showAll, archive) })
-  const inserts = useQuery({ queryKey: ['inserts', showAll ? 'all' : 'mine'], queryFn: () => api.inserts(showAll) })
-  const objects = useQuery({ queryKey: ['objects', showAll ? 'all' : 'mine'], queryFn: () => api.objects(showAll) })
+  // Zähler: auch was andere in gemeinsamen Projekten angelegt haben
+  const inserts = useQuery({ queryKey: ['inserts', showAll ? 'all' : 'mine', 'shared'], queryFn: () => api.inserts(showAll, true) })
+  const objects = useQuery({ queryKey: ['objects', showAll ? 'all' : 'mine', 'shared'], queryFn: () => api.objects(showAll, true) })
   const refresh = () => qc.invalidateQueries({ queryKey: ['projects'] })
   const archiveP = useMutation({ mutationFn: api.archiveProject, onSuccess: refresh })
   const restoreP = useMutation({ mutationFn: api.restoreProject, onSuccess: refresh })
@@ -62,8 +63,9 @@ function Projects({ showAll }: { showAll: boolean }) {
                   <span className="inline-flex items-center gap-2 font-semibold"><FolderSimple size={18} color="var(--accent)" /> <span className="truncate">{p.name}</span></span>
                   <span className="num text-sm" style={{ color: 'var(--ink-2)' }}>{p.drawer.drawer_x} x {p.drawer.drawer_y} mm · {c.obj} Werkzeuge · {c.ins} Einlagen</span>
                   <span className="num text-xs" style={{ color: 'var(--ink-3)' }}>{archive && p.archived_at ? `archiviert am ${new Date(p.archived_at).toLocaleDateString('de-DE')}` : p.template.height_mm ? `alle ${p.template.height_mm} mm hoch` : 'Höhe automatisch'}</span>
+                  <SharedChip p={p} />
                 </button>
-                {archive
+                {p.access?.role === 'member' ? null : archive
                   ? <button className="btn btn-sm" onClick={() => restoreP.mutate(p.id)} disabled={restoreP.isPending}>Wiederherstellen</button>
                   : <button className="btn btn-sm btn-quiet" aria-label={`${p.name} löschen`} title="Löschen (wird archiviert, wiederherstellbar)"
                     onClick={() => confirm(`Projekt "${p.name}" löschen? Es wird archiviert und lässt sich wiederherstellen.`) && archiveP.mutate(p.id)}><Trash size={14} /></button>}
@@ -73,6 +75,17 @@ function Projects({ showAll }: { showAll: boolean }) {
         </div>
       )}
     </section>
+  )
+}
+
+/** Geteilt: Mitglied ("von Anna") oder Besitzer mit Mitgliedern ("mit 2 Personen") */
+function SharedChip({ p }: { p: ProjectSpec }) {
+  const a = p.access
+  if (!a || (a.role !== 'member' && !a.members)) return null
+  return (
+    <span className="chip text-xs w-fit" title={a.role === 'member' ? 'Mit dir geteilt: du kannst alles bearbeiten' : 'Gemeinsam bearbeitet'}>
+      <UsersThree size={12} /> {a.role === 'member' ? `geteilt von ${a.owner}` : `mit ${a.members} ${a.members === 1 ? 'Person' : 'Personen'} geteilt`}
+    </span>
   )
 }
 

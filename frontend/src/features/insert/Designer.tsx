@@ -126,7 +126,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   }
   const ownFields = (spec.overrides ?? []).filter((f): f is TemplateField => f !== 'auto_grip' && (TEMPLATE_FIELDS as readonly string[]).includes(f))
 
-  const objects = useQuery({ queryKey: ['objects'], queryFn: () => api.objects(true) })
+  const objects = useQuery({ queryKey: ['objects', 'all', 'shared'], queryFn: () => api.objects(true, true) })
   const std = useQuery({ queryKey: ['standard-height'], queryFn: api.standardHeight, staleTime: 60_000 })
   const stdH = std.data?.height_mm ?? null
   const setStd = useMutation({

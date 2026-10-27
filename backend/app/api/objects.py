@@ -92,8 +92,9 @@ def create_demo(user: Principal = Depends(current_user)) -> ObjectSpec:
 
 
 @router.get("", response_model=list[ObjectSpec])
-def list_(all: bool = False, user: Principal = Depends(current_user)) -> list[ObjectSpec]:
-    return storage.list_objects(user, all_=all)
+def list_(all: bool = False, shared: bool = False, user: Principal = Depends(current_user)) -> list[ObjectSpec]:
+    """Eigene Objekte; shared=true zusätzlich die aus gemeinsamen Projekten."""
+    return storage.list_objects(user, all_=all, shared=shared)
 
 
 @router.get("/{oid}", response_model=ObjectSpec)
@@ -111,7 +112,9 @@ def rename(oid: str, body: NameBody, user: Principal = Depends(current_user)) ->
 
 @router.delete("/{oid}")
 def delete(oid: str, user: Principal = Depends(current_user)) -> dict:
-    _obj(oid, user)
+    spec = _obj(oid, user)
+    if not storage.can_delete(spec.owner_id, spec.project_id, user):
+        raise HTTPException(403, "Löschen darf nur, wer das Werkzeug angelegt hat oder wem das Projekt gehört.")
     storage.delete_object(oid)
     return {"ok": True}
 

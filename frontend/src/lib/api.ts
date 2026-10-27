@@ -4,7 +4,7 @@ export interface SegmentResult {
   edit_contour_px?: [number, number][]
 }
 
-import type { AdminUser, AuditEntry, AuthConfig, BaseplateSpec, CloneData, DrawerPlacement, InsertSpec, Job, LayoutOut, Me, ObjectSpec, PhotoMeta, PlatePlan, ProjectSpec, TextureInfo } from './types'
+import type { AdminUser, AuditEntry, AuthConfig, BaseplateSpec, CloneData, DrawerPlacement, InsertSpec, Job, LayoutOut, Me, ObjectSpec, PhotoMeta, PlatePlan, ProjectMember, ProjectSpec, TextureInfo } from './types'
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch('/api' + url, init)
@@ -19,6 +19,8 @@ async function req<T>(url: string, init?: RequestInit): Promise<T> {
   }
   return r.json()
 }
+/** Listen: all = alle Nutzer (nur Admins), shared = auch aus gemeinsamen Projekten */
+const listQuery = (all: boolean, shared: boolean) => `?all=${all}&shared=${shared}`
 const json = (method: string, body?: unknown): RequestInit => ({
   method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
 })
@@ -33,7 +35,7 @@ export const api = {
     req<AdminUser>(`/admin/users/${id}`, json('PUT', body)),
   deleteUser: (id: number) => req<{ ok: boolean; removed: number }>(`/admin/users/${id}`, json('DELETE')),
   audit: () => req<AuditEntry[]>('/admin/audit?limit=60'),
-  objects: (all = false) => req<ObjectSpec[]>(all ? '/objects?all=true' : '/objects'),
+  objects: (all = false, shared = false) => req<ObjectSpec[]>('/objects' + listQuery(all, shared)),
   object: (id: string) => req<ObjectSpec>(`/objects/${id}`),
   createObject: (name: string) => req<ObjectSpec>('/objects', json('POST', { name })),
   createDemo: () => req<ObjectSpec>('/objects/demo', json('POST')),
@@ -56,7 +58,7 @@ export const api = {
   profile: (id: string, body: Record<string, unknown>) => req<ObjectSpec>(`/objects/${id}/profile`, json('POST', body)),
   setLevels: (id: string, levels: [number, number, number][]) => req<ObjectSpec>(`/objects/${id}/levels`, json('PUT', { levels })),
 
-  inserts: (all = false) => req<InsertSpec[]>(all ? '/inserts?all=true' : '/inserts'),
+  inserts: (all = false, shared = false) => req<InsertSpec[]>('/inserts' + listQuery(all, shared)),
   insert: (id: string) => req<InsertSpec>(`/inserts/${id}`),
   setStandardHeight: (height_mm: number | null, source = '') =>
     req<{ height_mm: number | null; source: string | null }>('/inserts/standard-height', json('PUT', { height_mm, source })),
@@ -90,6 +92,9 @@ export const api = {
   saveProject: (p: ProjectSpec) => req<ProjectSpec>(`/projects/${p.id}`, json('PUT', p)),
   archiveProject: (id: string) => req(`/projects/${id}`, json('DELETE')),
   restoreProject: (id: string) => req<ProjectSpec>(`/projects/${id}/restore`, json('POST')),
+  members: (pid: string) => req<ProjectMember[]>(`/projects/${pid}/members`),
+  addMember: (pid: string, email: string) => req<ProjectMember[]>(`/projects/${pid}/members`, json('POST', { email })),
+  removeMember: (pid: string, uid: number) => req<{ ok: boolean; transferred: number }>(`/projects/${pid}/members/${uid}`, json('DELETE')),
   assign: (pid: string, kind: 'insert' | 'object', id: string, member = true) => req(`/projects/${pid}/assign`, json('POST', { kind, id, member })),
   generate: (pid: string, object_ids: string[] | null = null, arrange = true) =>
     req<{ created: string[]; skipped: string[]; already?: string[]; placed?: string[]; left_out?: string[]; left_out_names?: string[]; unfinished_names?: string[] }>(`/projects/${pid}/generate`, json('POST', { object_ids, arrange })),

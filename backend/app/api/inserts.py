@@ -215,8 +215,9 @@ def create_plug(body: PlugBody, user: Principal = Depends(current_user)) -> Inse
 
 
 @router.get("", response_model=list[InsertSpec])
-def list_(all: bool = False, user: Principal = Depends(current_user)) -> list[InsertSpec]:
-    return storage.list_inserts(user, all_=all)
+def list_(all: bool = False, shared: bool = False, user: Principal = Depends(current_user)) -> list[InsertSpec]:
+    """Eigene Einlagen; shared=true zusätzlich die aus gemeinsamen Projekten."""
+    return storage.list_inserts(user, all_=all, shared=shared)
 
 
 @router.get("/{iid}", response_model=InsertSpec)
@@ -230,8 +231,13 @@ def get(iid: str, user: Principal = Depends(current_user)) -> InsertSpec:
 @router.put("/{iid}", response_model=InsertSpec)
 def put(iid: str, spec: InsertSpec, user: Principal = Depends(current_user)) -> InsertSpec:
     old = get(iid, user)
-    storage.check_placements(spec, user)
-    if spec.project_id and spec.project_id != old.project_id:
+    moved = spec.project_id != old.project_id
+    if moved and not storage.may_move(old.owner_id, user):
+        raise HTTPException(403, "In ein anderes Projekt verschieben darf nur, wer die Einlage angelegt hat.")
+    # schon vorhandene Werkzeuge bleiben erlaubt, solange die Einlage im selben Projekt bleibt
+    keep = set() if moved else {pl.object_id for pl in old.placements}
+    storage.check_placements(spec, user, keep)          # KeyError -> 404
+    if spec.project_id and moved:
         try:
             storage.load_project(spec.project_id, user)
         except KeyError:
@@ -243,7 +249,9 @@ def put(iid: str, spec: InsertSpec, user: Principal = Depends(current_user)) -> 
 
 @router.delete("/{iid}")
 def delete(iid: str, user: Principal = Depends(current_user)) -> dict:
-    get(iid, user)
+    spec = get(iid, user)
+    if not storage.can_delete(spec.owner_id, spec.project_id, user):
+        raise HTTPException(403, "Löschen darf nur, wer die Einlage angelegt hat oder wem das Projekt gehört.")
     storage.delete_insert(iid)
     return {"ok": True}
 
@@ -511,7 +519,11 @@ def compartment_rect(iid: str, body: CompRect, user: Principal = Depends(current
 
 @router.post("/{iid}/build")
 def build(iid: str, spec: InsertSpec | None = None, user: Principal = Depends(current_user)) -> dict:
+    saved = get(iid, user)
     spec = _body_spec(iid, spec, user)
+    # Ausgaben landen bei der Einlage (im Projekt für alle sichtbar): nur Werkzeuge, die auch beim Speichern erlaubt wären
+    storage.check_placements(spec.model_copy(update={"project_id": saved.project_id}), user,
+                             {pl.object_id for pl in saved.placements})
     layout_payload(spec, user)                   # validiert Objekte
     objects = {k: v.model_dump_json() for k, v in storage.objects_for(spec, user).items()}
     job_id = jobs.submit("insert", build_tasks.build_insert_job, storage.insert_dir(iid) / "out",

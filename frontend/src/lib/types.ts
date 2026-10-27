@@ -174,7 +174,10 @@ export interface ProjectSpec {
   id: string; name: string; owner_id?: number | null; created_at: string
   drawer: BaseplateSpec; drawer_h: number | null; template: InsertTemplate; placements: DrawerPlacement[]; notes: string
   archived?: boolean; archived_at?: string
+  /** vom Server: eigene Rolle (owner, member; admin = fremdes Projekt über Admin-Rechte), Besitzer, Anzahl Mitglieder */
+  access?: { role: 'owner' | 'member' | 'admin'; owner: string; members: number }
 }
+export interface ProjectMember { id: number; email: string; name: string; role: 'owner' | 'member'; status: 'pending' | 'active' | 'disabled' }
 export interface CloneTool {
   object_id: string; name: string; contour: [number, number][]; s: number[]; bottom: number[]; top: number[]
   z_rest: number; x: number; y: number; rot_deg: number; has_texture: boolean

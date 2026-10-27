@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rectangle, Rows, Scan, SignOut, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rectangle, Rows, Scan, SignOut, SquaresFour, Trash, UsersThree, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec, TemplateField } from '../../lib/types'
 import { FIELD_LABELS } from '../../lib/types'
@@ -13,6 +13,7 @@ import { PITCH, PlateEditor } from '../baseplate/PlateEditor'
 import { BatchScan } from './BatchScan'
 import { NewBinForm } from '../insert/NewBinForm'
 import { NewPlugForm } from '../insert/NewPlugForm'
+import { Members } from './Members'
 
 const Clone3D = lazy(() => import('./Clone3D').then((m) => ({ default: m.Clone3D })))
 
@@ -33,6 +34,9 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
   const [tab, setTab] = useState<Tab>('drawer')
   const patch = (q: Partial<ProjectSpec>) => setP((s) => ({ ...s, ...q }))
   const clone = useQuery({ queryKey: ['clone', p.id], queryFn: () => api.clone(p.id) })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
+  const [share, setShare] = useState(false)
+  const isMember = p.access?.role === 'member'
   const refreshClone = () => { qc.invalidateQueries({ queryKey: ['clone', p.id] }); qc.invalidateQueries({ queryKey: ['inserts'] }); qc.invalidateQueries({ queryKey: ['objects'] }) }
 
   // Autosave (Name, Schublade, Vorlage). Platzierungen speichert der Server selbst (place/arrange).
@@ -68,18 +72,23 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
         )}
         <span className={`chip ${saveState === 'error' ? 'chip-err' : saveState === 'saved' ? 'chip-ok' : ''}`}>
           {saveState === 'saved' ? 'Gespeichert' : saveState === 'pending' ? 'Speichere …' : 'Nicht gespeichert'}</span>
+        <button className={`btn btn-sm ${share ? 'btn-on' : ''}`} onClick={() => setShare((v) => !v)} aria-expanded={share}
+          title={isMember ? `Geteilt von ${p.access?.owner}` : 'Andere Personen mitarbeiten lassen'}>
+          <UsersThree size={14} /> {isMember ? `geteilt von ${p.access?.owner}` : p.access?.members ? `Geteilt (${p.access.members})` : 'Teilen'}
+        </button>
         <div className="flex-1" />
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'drawer', label: 'Schublade' }, { value: 'tools', label: 'Werkzeuge & Einlagen' },
           { value: 'template', label: 'Vorlage' }, { value: 'plate', label: 'Baseplate' }]} />
       </header>
+      {share && <Members p={p} me={me.data} onCount={(n) => setP((q) => q.access ? { ...q, access: { ...q.access, members: n } } : q)} />}
       {p.archived && <Msg kind="info">Dieses Projekt ist archiviert und erscheint nicht in der Projektliste.
-        <button className="btn btn-sm ml-2" onClick={() => restore.mutate()}>Aus dem Archiv holen</button></Msg>}
+        {!isMember && <button className="btn btn-sm ml-2" onClick={() => restore.mutate()}>Aus dem Archiv holen</button>}</Msg>}
       {clone.isError && <Msg kind="err">{errText(clone.error)}</Msg>}
       {data?.warnings.map((w) => <Msg key={w} kind="warn">{w}</Msg>)}
 
       {data && !data.heights_equal && data.inserts.some((i) => i.placed) && (() => {
-        const h = Math.ceil(Math.max(...data.inserts.filter((i) => i.total_height).map((i) => i.total_height!)))
+        const h = Math.ceil(Math.max(...data.inserts.filter((i) => i.total_height && !i.blank).map((i) => i.total_height!)))   // Blindstopfen zählen nicht
         const own = data.inserts.filter((i) => i.overrides.includes('height_mm')).map((i) => i.name)
         return (
           <Msg kind="warn">Die Einlagen sind unterschiedlich hoch.
@@ -95,7 +104,7 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
       {tab === 'plate' && <PlateTab p={p} patch={patch} />}
 
       <div className="flex justify-end">
-        {p.archived
+        {isMember ? null : p.archived
           ? <button className="btn btn-sm" onClick={() => restore.mutate()}><ArrowClockwise size={14} /> Aus dem Archiv holen</button>
           : <button className="btn btn-sm btn-quiet" onClick={() => confirm(`Projekt "${p.name}" löschen? Es wird archiviert: Schublade, Einlagen und Werkzeuge bleiben erhalten und lassen sich wiederherstellen.`) && del.mutate()}>
             <Trash size={14} /> Projekt löschen (archivieren)</button>}
@@ -371,15 +380,19 @@ function DrawerView({ p, data, sel, onSelect, onDrop, cellMode = false, onToggle
 
 function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | undefined; refresh: () => void }) {
   const nav = useNavigate()
+  // eigene Bibliothek (zum Hinzufügen) und alles im Projekt, auch von anderen Mitgliedern
   const objects = useQuery({ queryKey: ['objects', 'mine'], queryFn: () => api.objects() })
   const inserts = useQuery({ queryKey: ['inserts', 'mine'], queryFn: () => api.inserts() })
-  const mine = (objects.data ?? []).filter((o) => o.project_id === p.id)
+  const sharedObjects = useQuery({ queryKey: ['objects', 'mine', 'shared'], queryFn: () => api.objects(false, true) })
+  const sharedInserts = useQuery({ queryKey: ['inserts', 'mine', 'shared'], queryFn: () => api.inserts(false, true) })
+  const mine = (sharedObjects.data ?? []).filter((o) => o.project_id === p.id)
   const others = (objects.data ?? []).filter((o) => o.project_id !== p.id && o.profile)
   const otherIns = (inserts.data ?? []).filter((i) => i.project_id !== p.id)
-  const withInsert = new Set((inserts.data ?? []).filter((i) => i.project_id === p.id).flatMap((i) => i.placements.map((q) => q.object_id)))
-  const done = () => { refresh(); objects.refetch(); inserts.refetch() }
+  const projectIns = (sharedInserts.data ?? []).filter((i) => i.project_id === p.id)
+  const withInsert = new Set(projectIns.flatMap((i) => i.placements.map((q) => q.object_id)))
+  const done = () => { refresh(); objects.refetch(); inserts.refetch(); sharedObjects.refetch(); sharedInserts.refetch() }
   const insOf = (oid: string) => (data?.inserts ?? []).filter((i) => i.tools?.some((t) => t.object_id === oid)
-    || (inserts.data ?? []).some((q) => q.id === i.id && q.placements.some((pl) => pl.object_id === oid)))
+    || projectIns.some((q) => q.id === i.id && q.placements.some((pl) => pl.object_id === oid)))
   const scan = useMutation({
     mutationFn: async () => { const o = await api.createObject('Neues Werkzeug'); await api.assign(p.id, 'object', o.id); return o },
     onSuccess: (o) => nav(`/scan/${o.id}`),

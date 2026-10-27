@@ -3,21 +3,29 @@
 Einstellungen: Die Mustervorlage (template) gilt für alle Einlagen des Projekts. Ändert sich die
 Vorlage, übernehmen alle Einlagen die neuen Werte, außer den Feldern, die eine Einlage bewusst
 überschreibt (InsertSpec.overrides). Die Liste der vererbten Felder steht in schemas.TEMPLATE_FIELDS.
+
+Gemeinsam bearbeiten: Der Besitzer fügt weitere Nutzer per E-Mail als Mitglieder hinzu. Mitglieder
+bearbeiten das Projekt wie der Besitzer (Schublade, Vorlage, Werkzeuge, Einlagen, Scans), dürfen aber
+keine Mitglieder verwalten, das Projekt nicht archivieren und nur selbst Angelegtes löschen. Sie
+können das Projekt verlassen; was sie darin angelegt haben, geht dann an den Besitzer über.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import Path as PathParam
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 
-from .. import build_tasks, jobs, scan, storage
+from .. import auth, build_tasks, db, jobs, scan, storage
 from ..auth import Principal, current_user
 from ..geometry.baseplate import plan_info, plan_plate
 from ..geometry.gridfinity import PITCH
 from ..geometry.layout import compute_layout
 from ..geometry.packing import Item, fits, pack
+from ..models import ProjectMember, User
 from ..schemas import BLANK_OWN_FIELDS, TEMPLATE_FIELDS, DrawerPlacement, InsertSpec, Placement, ProjectSpec
 from .inserts import layout_payload, standard_height
 from .objects import MAX_PHOTO_BYTES, PHOTO_TYPES, _read_limited
@@ -30,6 +38,39 @@ def _get(pid: str, user: Principal) -> ProjectSpec:
         return storage.load_project(pid, user)
     except KeyError:
         raise HTTPException(404, "Projekt nicht gefunden") from None
+
+
+def _owner_only(p: ProjectSpec, user: Principal, what: str) -> None:
+    if not (user.is_admin or p.owner_id == user.id):
+        raise HTTPException(403, f"{what} darf nur, wem das Projekt gehört.")
+
+
+class ProjectAccess(BaseModel):
+    role: Literal["owner", "member", "admin"]     # admin: sieht fremde Projekte über die Admin-Rechte
+    owner: str                                    # Name (oder E-Mail) des Besitzers
+    members: int                                  # Anzahl Mitglieder (ohne Besitzer)
+
+
+class ProjectOut(ProjectSpec):
+    access: ProjectAccess
+
+
+def _out(ps: list[ProjectSpec], user: Principal) -> list[ProjectOut]:
+    with db.session() as s:
+        counts = dict(s.execute(select(ProjectMember.project_id, func.count())
+                                .group_by(ProjectMember.project_id)).all())
+        names = {i: n or e for i, n, e in s.execute(select(User.id, User.name, User.email)).all()}
+    mine = storage.member_projects(user.id)
+    out = []
+    for p in ps:
+        role = "owner" if p.owner_id == user.id else "member" if p.id in mine else "admin"
+        out.append(ProjectOut(**p.model_dump(), access=ProjectAccess(
+            role=role, owner=names.get(p.owner_id, "") if p.owner_id is not None else "", members=counts.get(p.id, 0))))
+    return out
+
+
+def _one(p: ProjectSpec, user: Principal) -> ProjectOut:
+    return _out([p], user)[0]
 
 
 def _migrate(ins: InsertSpec) -> InsertSpec:
@@ -53,10 +94,10 @@ def apply_template(p: ProjectSpec, ins: InsertSpec) -> InsertSpec:
     return ins.model_copy(update=upd, deep=True)
 
 
-@router.get("", response_model=list[ProjectSpec])
-def list_(all: bool = False, archived: bool = False, user: Principal = Depends(current_user)) -> list[ProjectSpec]:
-    """Aktive Projekte; mit archived=true nur die archivierten."""
-    return [p for p in storage.list_projects(user, all_=all) if p.archived == archived]
+@router.get("", response_model=list[ProjectOut])
+def list_(all: bool = False, archived: bool = False, user: Principal = Depends(current_user)) -> list[ProjectOut]:
+    """Aktive Projekte (eigene und gemeinsame); mit archived=true nur die archivierten."""
+    return _out([p for p in storage.list_projects(user, all_=all) if p.archived == archived], user)
 
 
 class NewProject(BaseModel):
@@ -65,23 +106,24 @@ class NewProject(BaseModel):
     drawer_y: float = Field(350, ge=20, le=2000)
 
 
-@router.post("", response_model=ProjectSpec)
-def create(body: NewProject, user: Principal = Depends(current_user)) -> ProjectSpec:
+@router.post("", response_model=ProjectOut)
+def create(body: NewProject, user: Principal = Depends(current_user)) -> ProjectOut:
     p = ProjectSpec(name=body.name.strip() or "Schublade")
     p.drawer.drawer_x, p.drawer.drawer_y = body.drawer_x, body.drawer_y
     std = standard_height(user)
     if std:                                   # alle Einlagen gleich hoch: Standardhöhe als Vorlage
         p.template.height_mm = std[0]
-    return storage.create_project(p, user)
+    return _one(storage.create_project(p, user), user)
 
 
-@router.get("/{pid}", response_model=ProjectSpec)
-def get(pid: str, user: Principal = Depends(current_user)) -> ProjectSpec:
-    return _get(pid, user)
+@router.get("/{pid}", response_model=ProjectOut)
+def get(pid: str, user: Principal = Depends(current_user)) -> ProjectOut:
+    return _one(_get(pid, user), user)
 
 
-@router.put("/{pid}", response_model=ProjectSpec)
-def put(pid: str, spec: ProjectSpec, user: Principal = Depends(current_user)) -> ProjectSpec:
+@router.put("/{pid}", response_model=ProjectOut)
+def put(pid: str, spec: ProjectSpec, user: Principal = Depends(current_user)) -> ProjectOut:
+    """Speichern (Besitzer und Mitglieder). Besitzer und Archiv-Stand ändern sich hier nie."""
     old = _get(pid, user)
     spec = spec.model_copy(update={"id": pid, "owner_id": old.owner_id, "created_at": old.created_at,
                                    "archived": old.archived, "archived_at": old.archived_at})
@@ -91,7 +133,7 @@ def put(pid: str, spec: ProjectSpec, user: Principal = Depends(current_user)) ->
             new = apply_template(spec, ins)
             if new != ins:
                 storage.save_insert(new)
-    return spec
+    return _one(spec, user)
 
 
 @router.delete("/{pid}")
@@ -100,17 +142,90 @@ def delete(pid: str, user: Principal = Depends(current_user)) -> dict:
     Werkzeuge) bleiben erhalten und lassen sich wiederherstellen. Endgültig löschen: storage.delete_project."""
     from datetime import datetime, timezone
     p = _get(pid, user)
+    _owner_only(p, user, "Löschen (archivieren)")
     p.archived, p.archived_at = True, datetime.now(timezone.utc).isoformat()
     storage.save_project(p)
     return {"ok": True, "archived": True}
 
 
-@router.post("/{pid}/restore", response_model=ProjectSpec)
-def restore(pid: str, user: Principal = Depends(current_user)) -> ProjectSpec:
+@router.post("/{pid}/restore", response_model=ProjectOut)
+def restore(pid: str, user: Principal = Depends(current_user)) -> ProjectOut:
     p = _get(pid, user)
+    _owner_only(p, user, "Wiederherstellen")
     p.archived, p.archived_at = False, ""
     storage.save_project(p)
-    return p
+    return _one(p, user)
+
+
+# ---- Mitglieder ------------------------------------------------------------------------------
+def _members(p: ProjectSpec) -> list[dict]:
+    ids = storage.member_ids(p.id)
+    with db.session() as s:
+        users = {u.id: u for u in s.scalars(select(User).where(User.id.in_([p.owner_id or -1, *ids])))}
+        out = []
+        for uid, role in [(p.owner_id, "owner"), *((i, "member") for i in ids)]:
+            u = users.get(uid)
+            if u is not None:
+                out.append({"id": u.id, "email": u.email, "name": u.name, "role": role, "status": u.status})
+        return out
+
+
+@router.get("/{pid}/members")
+def members(pid: str, user: Principal = Depends(current_user)) -> list[dict]:
+    """Besitzer und Mitglieder (für alle Beteiligten sichtbar)."""
+    return _members(_get(pid, user))
+
+
+class MemberBody(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+
+
+@router.post("/{pid}/members")
+def add_member(pid: str, body: MemberBody, request: Request, user: Principal = Depends(current_user)) -> list[dict]:
+    """Nutzer per E-Mail hinzufügen (nur der Besitzer). Das Konto muss es schon geben (einmal
+    angemeldet); gesperrte Konten gelten als nicht vorhanden. Fehlversuche sind begrenzt, damit sich
+    nicht ausprobieren lässt, wer ein Konto hat."""
+    p = _get(pid, user)
+    _owner_only(p, user, "Mitglieder hinzufügen")
+    key = f"member:{user.id}"
+    if auth._too_many(key):
+        raise HTTPException(429, "Zu viele erfolglose Versuche. Bitte in ein paar Minuten erneut versuchen.")
+    email = body.email.strip().lower()
+    with db.session() as s:
+        u = s.scalar(select(User).where(User.email == email))
+        uid = u.id if u is not None and u.status != "disabled" else None
+    if uid is None:
+        auth._fail(key)
+        raise HTTPException(404, "Kein Konto mit dieser E-Mail. Die Person muss sich zuerst einmal anmelden.")
+    if uid == p.owner_id:
+        raise HTTPException(409, "Das ist der Besitzer des Projekts.")
+    ids = storage.member_ids(pid)
+    if uid in ids:
+        raise HTTPException(409, "Diese Person ist schon Mitglied.")
+    if len(ids) >= storage.MAX_MEMBERS:
+        raise HTTPException(409, f"Höchstens {storage.MAX_MEMBERS} Mitglieder je Projekt.")
+    storage.add_member(pid, uid, user.id)
+    auth.audit("project_member_add", f"{p.name} ({pid}): {email}", user.id, auth.client_ip(request))
+    return _members(p)
+
+
+@router.delete("/{pid}/members/{uid}")
+def remove_member(pid: str, uid: Annotated[int, PathParam(ge=1, le=2**31)], request: Request, user: Principal = Depends(current_user)) -> dict:
+    """Mitglied entfernen (Besitzer) oder selbst austreten. Was das Mitglied im Projekt angelegt hat,
+    bleibt im Projekt und gehört danach dem Besitzer."""
+    p = _get(pid, user)
+    if uid != user.id:
+        _owner_only(p, user, "Mitglieder entfernen")
+    if uid == p.owner_id:
+        raise HTTPException(409, "Der Besitzer kann das Projekt nicht verlassen.")
+    if uid not in storage.member_ids(pid):
+        raise HTTPException(404, "Kein Mitglied dieses Projekts.")
+    moved = storage.remove_member(pid, uid)
+    with db.session() as s:
+        email = s.scalar(select(User.email).where(User.id == uid)) or str(uid)
+    auth.audit("project_member_leave" if uid == user.id else "project_member_remove",
+               f"{p.name} ({pid}): {email}", user.id, auth.client_ip(request))
+    return {"ok": True, "transferred": moved}
 
 
 class AssignBody(BaseModel):
@@ -121,11 +236,22 @@ class AssignBody(BaseModel):
 
 @router.post("/{pid}/assign")
 def assign(pid: str, body: AssignBody, user: Principal = Depends(current_user)) -> dict:
-    """Einlage oder Werkzeug dem Projekt zuordnen (oder herausnehmen)."""
+    """Einlage oder Werkzeug dem Projekt zuordnen (oder herausnehmen). Hineinlegen darf man nur Eigenes
+    (bzw. was schon im Projekt liegt), herausnehmen nur, was im Projekt liegt."""
     p = _get(pid, user)
     try:
+        item = storage.load_insert(body.id, user) if body.kind == "insert" else storage.load_object(body.id, user)
+        if body.member and item.project_id != pid and not storage.may_move(item.owner_id, user):
+            raise HTTPException(403, "Ins Projekt legen darf nur, wer den Eintrag angelegt hat.")
+        if not body.member and item.project_id != pid:
+            raise HTTPException(422, "Liegt nicht in diesem Projekt.")
         if body.kind == "insert":
-            ins = storage.load_insert(body.id, user)
+            ins = item
+            if body.member and ins.project_id != pid:
+                try:
+                    storage.check_placements(ins.model_copy(update={"project_id": pid}), user)
+                except KeyError:
+                    raise HTTPException(403, "Die Einlage enthält Werkzeuge, die dir nicht gehören.") from None
             ins = apply_template(p, ins.model_copy(update={"project_id": pid, "overrides": []})) if body.member \
                 else ins.model_copy(update={"project_id": None, "overrides": []})
             storage.save_insert(ins)
@@ -133,7 +259,7 @@ def assign(pid: str, body: AssignBody, user: Principal = Depends(current_user)) 
                 p.placements = [q for q in p.placements if q.insert_id != body.id]
                 storage.save_project(p)
         else:
-            o = storage.load_object(body.id, user)
+            o = item
             o.project_id = pid if body.member else None
             storage.save_object(o)
     except KeyError:
@@ -165,10 +291,12 @@ def generate(pid: str, body: GenerateBody, user: Principal = Depends(current_use
     (optional) alles in der Schublade anordnen."""
     p = _get(pid, user)
     have = {pl.object_id for ins in project_inserts(p) for pl in ins.placements}
-    objs = [o for o in storage.list_objects(user) if o.project_id == pid]
+    objs = [o for o in storage.list_objects(user, shared=True) if o.project_id == pid]
     if body.object_ids is not None:
         want = set(body.object_ids)
-        objs = [o for o in storage.list_objects(user) if o.id in want]
+        objs = [o for o in storage.list_objects(user, shared=True) if o.id in want]
+        if any(o.project_id != pid and not storage.may_move(o.owner_id, user) for o in objs):
+            raise HTTPException(403, "Ins Projekt legen darf nur, wer das Werkzeug angelegt hat.")
     created, skipped = [], []
     already = []
     for o in objs:
@@ -322,7 +450,7 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
         warnings.append(f"Höchste Einlage ({max(tops):.1f} mm) ist höher als die Schublade ({p.drawer_h:.0f} mm).")
     return {"plan": plan_info(p.drawer, plan), "pitch": PITCH, "inserts": inserts,
             "warnings": list(dict.fromkeys(warnings)), "conflicts": list(conflicts.values()),
-            "heights_equal": bool(heights) and max(h for h, _ in heights) - min(h for h, _ in heights) <= 0.05}
+            "heights_equal": not heights or max(h for h, _ in heights) - min(h for h, _ in heights) <= 0.05}
 
 
 class PlaceBody(BaseModel):
@@ -385,7 +513,7 @@ async def scan_pair(pid: str, top: UploadFile = File(...), side: UploadFile = Fi
         if ext not in PHOTO_TYPES:
             raise HTTPException(415, "Bitte Fotos als JPG, PNG oder WebP hochladen")
         files[view] = (await _read_limited(f, MAX_PHOTO_BYTES), ext)
-    n = sum(1 for o in storage.list_objects(user) if o.project_id == pid)
+    n = sum(1 for o in storage.list_objects(user, shared=True) if o.project_id == pid)
     obj = storage.create_object(name.strip() or f"Werkzeug {n + 1}", user)
     obj.project_id = pid
     try:

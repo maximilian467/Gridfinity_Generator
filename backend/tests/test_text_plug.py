@@ -165,3 +165,13 @@ def test_build_job_plug_slots_without_gaps():
     ex = {pt.find("metadata[@key='name']").get("value"): pt.find("metadata[@key='extruder']").get("value")
           for pt in cfg.iter("part")}
     assert ex == {"Körper": "1", "Schrift": "2"}
+
+
+def test_only_plugs_in_drawer_count_as_equal_height():
+    """Nur Blindstopfen in der Schublade: keine Warnung 'unterschiedlich hoch'."""
+    p = client.post("/api/projects", json={"name": "nur Stopfen", "drawer_x": 300, "drawer_y": 200}).json()
+    for h in (6, 9):
+        client.post("/api/inserts/plug", json={"height_mm": h, "project_id": p["id"]})
+    client.post(f"/api/projects/{p['id']}/arrange", json={"mode": "all"})
+    c = client.get(f"/api/projects/{p['id']}/clone").json()
+    assert sum(1 for i in c["inserts"] if i["placed"]) == 2 and c["heights_equal"]

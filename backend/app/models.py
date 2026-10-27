@@ -1,4 +1,4 @@
-"""Datenbank-Tabellen: Nutzer, Sitzungen, Protokoll. Objekte/Einlagen bleiben JSON-Dateien (mit owner_id)."""
+"""Datenbank-Tabellen: Nutzer, Sitzungen, Protokoll, Projekt-Mitglieder. Objekte/Einlagen bleiben JSON-Dateien (mit owner_id)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -66,3 +66,13 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(40))
     target: Mapped[str] = mapped_column(String(200), default="")
     ip: Mapped[str] = mapped_column(String(64), default="")
+
+
+class ProjectMember(Base):
+    """Weitere Bearbeiter eines Projekts (der Besitzer steht in project.json und nicht hier)."""
+    __tablename__ = "project_members"
+
+    project_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    added_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    added_by: Mapped[int | None] = mapped_column(Integer, nullable=True)

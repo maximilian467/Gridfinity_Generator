@@ -121,8 +121,7 @@ def files(path: str, user: auth.Principal = Depends(auth.current_user)) -> FileR
     if (not parts or parts[0] not in FILE_DIRS or any(p.startswith(".") for p in parts)
             or f.suffix.lower() not in FILE_TYPES or not f.is_file()):
         raise HTTPException(404, "Datei nicht gefunden")
-    found, owner = storage.owner_of_path(parts)      # Besitzer aus object.json / insert.json / job.json
-    if not found or not storage.can_access(owner, user):
+    if not storage.can_read_path(parts, user):         # wie Objekt/Einlage (auch gemeinsames Projekt), Basisplatte: Besitzer
         raise HTTPException(404, "Datei nicht gefunden")
     # sandbox: falls je aktive Inhalte (SVG) dabei sind, laufen sie nicht im Kontext der App
     return FileResponse(f, headers={"Cache-Control": "no-cache", "Content-Security-Policy": "sandbox"})

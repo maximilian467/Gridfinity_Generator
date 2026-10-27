@@ -59,3 +59,14 @@ ihren Einlagen, eine Mustervorlage für die Einstellungen und eine 2D/3D-Ansicht
     Boden in Schriftfarbe). Die Schrift wird auf die freie Oberfläche zugeschnitten (1,2 mm Abstand zu Taschen,
     Mulden, Fächern, Rand). Jede Schriftfarbe ist ein eigener Farbteil; Slots folgen `schemas.color_palette` und
     werden beim Export lückenlos durchnummeriert.
+12. **Gemeinsame Projekte** (Tabelle `project_members`, Migration 0002; Regeln in `storage.py`): Der Besitzer
+    fügt Nutzer per E-Mail als Mitglieder hinzu (Konto muss existieren, gesperrte gelten als nicht vorhanden,
+    Fehlversuche begrenzt). Beteiligte (Besitzer und Mitglieder) sehen und bearbeiten alles mit `project_id` des
+    Projekts, dazu die Werkzeuge in dessen Einlagen, sofern ihr Besitzer beteiligt ist (Bibliotheks-Werkzeuge
+    eines Mitglieds). Neu in eine Einlage legen darf man nur eigene Werkzeuge oder solche desselben Projekts;
+    in ein (anderes) Projekt verschieben nur der Besitzer des Eintrags. So kann niemand, was er über ein Projekt
+    sieht, in ein anderes oder in seine Bibliothek weiterreichen. Nur der Projektbesitzer (und Admins) verwaltet
+    Mitglieder und archiviert; löschen darf, wer den Eintrag angelegt hat oder wem das Projekt gehört.
+    Entfernte oder austretende Mitglieder: ihre Einträge im Projekt gehen an den Besitzer über, ihre Bibliothek
+    bleibt privat. Gelöschter Besitzer: das Projekt geht an das älteste Mitglied (ohne Mitglieder wird es
+    gelöscht). Listen: `?shared=true` liefert zusätzlich die Projektsachen; ohne bleibt die Bibliothek privat.
