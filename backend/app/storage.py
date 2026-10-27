@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import config
-from .schemas import InsertSpec, ObjectSpec, ProjectSpec
+from .schemas import InsertSpec, ObjectSpec, ProjectSpec, color_palette
 
 if TYPE_CHECKING:
     from .auth import Principal
@@ -212,14 +212,10 @@ def insert_created(spec: InsertSpec) -> str:
 
 
 def slots_from_colors(spec: InsertSpec) -> InsertSpec:
-    """Filament-Slots folgen den gewählten Farben: gleiche Farbe = gleicher Slot (Körper zuerst)."""
-    order: list[str] = []
-    out = {}
-    for k in ("body", "pocket", "grip", "compartment"):
-        h = getattr(spec.color_hex, k).lower()
-        if h not in order:
-            order.append(h)
-        out[k] = order.index(h) + 1
+    """Filament-Slots folgen den gewählten Farben: gleiche Farbe = gleicher Slot (Körper zuerst,
+    Schriftfarben danach, siehe schemas.color_palette)."""
+    order = color_palette(spec)
+    out = {k: order.index(getattr(spec.color_hex, k).lower()) + 1 for k in ("body", "pocket", "grip", "compartment")}
     spec.colors = spec.colors.model_copy(update=out)
     return spec
 

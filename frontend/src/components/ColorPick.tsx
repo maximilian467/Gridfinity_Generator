@@ -46,11 +46,12 @@ export function ColorPick({ value, onChange, label }: { value: string; onChange:
   )
 }
 
-export function PartColorsEdit({ value, onChange }: { value: PartColors; onChange: (v: PartColors) => void }) {
+/** parts: nur diese Teile anbieten (z. B. Blindstopfen: nur der Körper) */
+export function PartColorsEdit({ value, onChange, parts }: { value: PartColors; onChange: (v: PartColors) => void; parts?: (keyof PartColors)[] }) {
   const slots = slotsFromColors(value)
   return (
     <div className="grid gap-3">
-      {PART_LABELS.map(([k, label]) => (
+      {PART_LABELS.filter(([k]) => !parts || parts.includes(k)).map(([k, label]) => (
         <ColorPick key={k} label={`${label} · Slot ${slots[k]}`} value={value[k]} onChange={(v) => onChange({ ...value, [k]: v })} />
       ))}
       <div className="hint mt-0">Gleiche Farben teilen sich einen Filament-Slot im 3MF (Bambu Studio / Orca).</div>

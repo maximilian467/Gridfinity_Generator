@@ -80,6 +80,9 @@ export const api = {
   /** Fächer-Einlage ohne Werkzeug (Sortierkasten); height_mm null = Standardhöhe bzw. Projektvorlage */
   createBin: (b: { name: string; grid_x: number; grid_y: number; cols: number; rows: number; height_mm: number | null; project_id?: string | null }) =>
     req<InsertSpec>('/inserts/bin', json('POST', b)),
+  /** Blindstopfen: verschließt freie Felder, Höhe frei (ab 5,5 mm), optional mit Beschriftung */
+  createPlug: (b: { name: string; grid_x: number; grid_y: number; height_mm: number; stacking_lip: boolean; text: string; project_id?: string | null }) =>
+    req<InsertSpec>('/inserts/plug', json('POST', b)),
 
   projects: (all = false, archived = false) => req<ProjectSpec[]>(`/projects?all=${all}&archived=${archived}`),
   project: (id: string) => req<ProjectSpec>(`/projects/${id}`),

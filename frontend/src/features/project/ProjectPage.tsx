@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rows, Scan, SignOut, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rectangle, Rows, Scan, SignOut, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec, TemplateField } from '../../lib/types'
 import { FIELD_LABELS } from '../../lib/types'
@@ -12,6 +12,7 @@ import { PlateBuild, PlateSettings, toggleCells, usePlatePlan } from '../basepla
 import { PITCH, PlateEditor } from '../baseplate/PlateEditor'
 import { BatchScan } from './BatchScan'
 import { NewBinForm } from '../insert/NewBinForm'
+import { NewPlugForm } from '../insert/NewPlugForm'
 
 const Clone3D = lazy(() => import('./Clone3D').then((m) => ({ default: m.Clone3D })))
 
@@ -387,6 +388,7 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
   const gen = useMutation({ mutationFn: (oid: string) => api.generate(p.id, [oid], true), onSuccess: done })
   const [batch, setBatch] = useState(() => { try { return !!sessionStorage.getItem(`batch-scan:${p.id}`) } catch { return false } })
   const [binForm, setBinForm] = useState(false)
+  const [plugForm, setPlugForm] = useState(false)
   const [binMsg, setBinMsg] = useState<{ kind: 'ok' | 'info'; text: string } | null>(null)
   // neue Fächer-Einlage gleich in einen freien Platz der Schublade legen
   const binCreated = async (i: { id: string; name: string }) => {
@@ -447,9 +449,12 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
               {otherIns.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
           )}
-          <button className={`btn ${binForm ? 'btn-on' : ''}`} onClick={() => { setBinForm((v) => !v); setBinMsg(null) }}
+          <button className={`btn ${plugForm ? 'btn-on' : ''}`} onClick={() => { setPlugForm((v) => !v); setBinForm(false); setBinMsg(null) }}
+            title="Deckel für freie Felder der Baseplate, Höhe frei (auch sehr flach)"><Rectangle size={16} /> Blindstopfen</button>
+          <button className={`btn ${binForm ? 'btn-on' : ''}`} onClick={() => { setBinForm((v) => !v); setPlugForm(false); setBinMsg(null) }}
             title="Einlage ohne Werkzeug, nur mit Fächern (Sortierkasten)"><SquaresFour size={16} /> Fächer-Einlage</button>
         </div>
+        {plugForm && <NewPlugForm projectId={p.id} onCancel={() => setPlugForm(false)} onCreated={(i) => { setPlugForm(false); binCreated(i) }} />}
         {binForm && <NewBinForm projectId={p.id} defaultHeight={p.template.height_mm} onCancel={() => setBinForm(false)} onCreated={binCreated} />}
         {binMsg && <Msg kind={binMsg.kind} onClose={() => setBinMsg(null)}>{binMsg.text}</Msg>}
         <div className="panel divide-y" style={{ borderColor: 'var(--line)' }}>
@@ -459,6 +464,7 @@ function ToolsTab({ p, data, refresh }: { p: ProjectSpec; data: CloneData | unde
               <span className="swatch" style={{ background: i.colors.pocket, border: `3px solid ${i.colors.body}` }} />
               <button className="font-medium text-left flex-1 truncate bg-transparent border-0 cursor-pointer p-0" style={{ color: 'var(--ink)', font: 'inherit', fontWeight: 500 }}
                 onClick={() => nav(`/insert/${i.id}`)}>{i.name}</button>
+              {i.blank && <span className="chip text-xs" title="Höhe und Stapelrand unabhängig von der Vorlage"><Rectangle size={12} /> Blindstopfen</span>}
               {i.overrides.length > 0 && <span className="chip chip-warn text-xs" title={i.overrides.map((f) => FIELD_LABELS[f as TemplateField] ?? f).join(', ')}>{i.overrides.length} eigene Einstellung(en)</span>}
               <span className="num text-xs" style={{ color: 'var(--ink-2)' }}>{i.gx ? `${i.gx} x ${i.gy} · ${i.total_height?.toFixed(1)} mm` : i.error}</span>
               <span className={`chip text-xs ${i.placed ? 'chip-ok' : ''}`}>{i.placed ? 'in der Schublade' : 'draußen'}</span>

@@ -48,3 +48,14 @@ ihren Einlagen, eine Mustervorlage für die Einstellungen und eine 2D/3D-Ansicht
    je Werkzeug schreibt der Worker über `jobs.report` (`progress.json`). Ein Fehler betrifft nur sein Werkzeug;
    der nicht geschaffte Schritt bleibt im Scan-Assistenten offen. Auto-Tausch vertauschter Ansichten gibt es nicht,
    nur eine Warnung ("dicker als breit").
+10. **Blindstopfen** (`InsertSpec.blank`, `POST /inserts/plug`): Einlage ohne Taschen und Fächer, die freie Felder
+    der Baseplate verschließt. Höhe ab `PLUG_MIN_H` = 5,5 mm (Fuß bis 5,0 mm + 0,5 mm Deckplatte; flacher zerfällt
+    ein mehrfeldriger Stopfen in Einzelfüße). Unter 1 U gibt es keinen Stapelrand. Höhe und Stapelrand bestimmt der
+    Stopfen immer selbst (`BLANK_OWN_FIELDS`, wirkt in `apply_template`), alles andere (Farben, Magnete) kommt aus
+    der Vorlage. Stopfen zählen nicht zur Prüfung "Einlagen unterschiedlich hoch".
+11. **Schrift** (`InsertSpec.texts`, `geometry/text.py`): Umriss aus DejaVu Sans (liegt matplotlib bei, also
+    überall dieselbe Schrift) als shapely-Fläche; dieselbe Fläche zeigt der 2D-Editor und schneidet bzw. ergänzt das
+    CAD. Stile: erhaben (Prisma auf der Oberfläche), bündig (oberste Schichten in Schriftfarbe), vertieft (Tasche,
+    Boden in Schriftfarbe). Die Schrift wird auf die freie Oberfläche zugeschnitten (1,2 mm Abstand zu Taschen,
+    Mulden, Fächern, Rand). Jede Schriftfarbe ist ein eigener Farbteil; Slots folgen `schemas.color_palette` und
+    werden beim Export lückenlos durchnummeriert.

@@ -4,7 +4,7 @@ import { alpha, useTokens } from '../../lib/theme'
 import type { InsertSpec, LayoutOut, ObjectSpec, PolyOut } from '../../lib/types'
 import { useStableWidth } from '../../lib/stableWidth'
 
-export type Sel = { kind: 'placement' | 'grip' | 'comp'; index: number } | null
+export type Sel = { kind: 'placement' | 'grip' | 'comp' | 'text'; index: number } | null
 /** Zeichenwerkzeug: Kasten aufziehen oder gerader Schnitt durch einen Kasten */
 export type Tool = { kind: 'box' } | { kind: 'cut'; axis: 'h' | 'v'; comp: number } | null
 
@@ -187,6 +187,30 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
                 <Polys polys={polys} ox={ox} oy={oy} k={k} fill={alpha(tk.green, 0.3)}
                   stroke={act ? tk.accent : tk.green} width={act ? 2.5 : 1.25} />
                 {polys[0] && label(...centroid(polys[0]), c.depth === null ? 'max' : lc ? lc.depth.toFixed(0) : c.depth.toFixed(0), ox, oy)}
+              </Group>
+            )
+          })}
+          {/* Schriftzüge (Umriss aus dem Layout, Farbe = Druckfarbe; vertieft gestrichelt) */}
+          {layout && (spec.texts ?? []).map((t, ti) => {
+            const lt = layout.texts?.find((q) => q.index === ti)
+            const ox = t.x + sx, oy = t.y + sy
+            const act = sel?.kind === 'text' && sel.index === ti
+            const tw = t.size * k * (0.9 * Math.max(t.text.length, 1) + 0.4), th = t.size * k * 1.5
+            return (
+              <Group key={'t' + ti} x={px(ox)} y={py(oy)} draggable
+                onMouseDown={() => onSelect({ kind: 'text', index: ti })} onDragEnd={dragEnd({ kind: 'text', index: ti })}>
+                {lt ? (
+                  <Polys polys={lt.polygons} ox={ox} oy={oy} k={k} fill={t.color} stroke={act ? tk.accent : tk.ink}
+                    width={act ? 1.5 : 0.6} dash={t.style === 'engraved' ? [3, 2] : undefined} />
+                ) : null}
+                {/* Greiffläche in Schriftrichtung (auch zwischen den Buchstaben anklickbar); ohne Umriss
+                    (Schrift entfällt über Tasche/Rand) steht hier der Text, damit sie greifbar bleibt */}
+                <Group rotation={-t.rot_deg}>
+                  {!lt && <Text x={-tw / 2} y={-th / 2} width={tw} height={th} align="center" verticalAlign="middle" text={t.text}
+                    fontSize={Math.max(t.size * k, 9)} fill={tk['ink-2']} fontStyle="bold" listening={false} />}
+                  <Rect x={-tw / 2} y={-th / 2} width={tw} height={th} fill="transparent"
+                    stroke={act || !lt ? tk.accent : undefined} strokeWidth={1} dash={[4, 3]} />
+                </Group>
               </Group>
             )
           })}

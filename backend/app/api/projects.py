@@ -18,7 +18,7 @@ from ..geometry.baseplate import plan_info, plan_plate
 from ..geometry.gridfinity import PITCH
 from ..geometry.layout import compute_layout
 from ..geometry.packing import Item, fits, pack
-from ..schemas import TEMPLATE_FIELDS, DrawerPlacement, InsertSpec, Placement, ProjectSpec
+from ..schemas import BLANK_OWN_FIELDS, TEMPLATE_FIELDS, DrawerPlacement, InsertSpec, Placement, ProjectSpec
 from .inserts import layout_payload, standard_height
 from .objects import MAX_PHOTO_BYTES, PHOTO_TYPES, _read_limited
 
@@ -46,8 +46,10 @@ def project_inserts(p: ProjectSpec) -> list[InsertSpec]:
 
 
 def apply_template(p: ProjectSpec, ins: InsertSpec) -> InsertSpec:
-    """Vorlagenwerte in die Einlage übernehmen, außer den überschriebenen Feldern."""
-    upd = {f: getattr(p.template, f) for f in TEMPLATE_FIELDS if f not in ins.overrides}
+    """Vorlagenwerte in die Einlage übernehmen, außer den überschriebenen Feldern (Blindstopfen:
+    Höhe und Stapelrand immer eigene Werte)."""
+    own = set(ins.overrides) | (set(BLANK_OWN_FIELDS) if ins.blank else set())
+    upd = {f: getattr(p.template, f) for f in TEMPLATE_FIELDS if f not in own}
     return ins.model_copy(update=upd, deep=True)
 
 
@@ -188,8 +190,8 @@ def generate(pid: str, body: GenerateBody, user: Principal = Depends(current_use
 
 def _check_ready(ins: InsertSpec, objs: dict) -> None:
     """Einlage lässt sich berechnen: Werkzeuge fertig gescannt; ohne Werkzeug nur als
-    Fächer-Einlage (mit Fächern)."""
-    if not ins.placements and not ins.compartments:
+    Fächer-Einlage (mit Fächern) oder Blindstopfen."""
+    if not ins.placements and not ins.compartments and not ins.blank:
         raise ValueError("Einlage ist leer (kein Werkzeug, keine Fächer)")
     if any(o.profile is None or not o.contour_mm for o in objs.values()):
         raise ValueError("Werkzeug noch nicht fertig gescannt")
@@ -266,11 +268,12 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     pos = {q.insert_id: q for q in p.placements}
-    inserts, warnings, heights = [], [], []
+    inserts, warnings, heights, tops = [], [], [], []
     occupied: dict[tuple[int, int], tuple[str, str]] = {}
     conflicts: dict[tuple[int, int], dict] = {}          # Zellen mit Überlappung oder außerhalb (zum Markieren)
     for ins in project_inserts(p):
         item = {"id": ins.id, "name": ins.name, "colors": ins.color_hex.model_dump(), "overrides": ins.overrides,
+                "blank": ins.blank,
                 "placed": pos[ins.id].model_dump() if ins.id in pos else None, "error": None}
         try:
             objs = storage.objects_for(ins, user)
@@ -284,7 +287,9 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
                         layout=layout_payload(ins, user), tools=_tool_payload(ins, lay, objs),
                         cut_union=_polys(cut.simplify(0.05)))
             if ins.id in pos:
-                heights.append((lay.total_height, ins.name))
+                tops.append(lay.text_top)          # inkl. erhabener Schrift (Schubladenhöhe)
+                if not ins.blank:                   # Blindstopfen sind absichtlich flacher
+                    heights.append((lay.total_height, ins.name))
                 q = pos[ins.id]
                 w, h = (lay.grid_x, lay.grid_y) if q.rot == 0 else (lay.grid_y, lay.grid_x)
                 for c in [(i, j) for i in range(q.ix, q.ix + w) for j in range(q.iy, q.iy + h)]:
@@ -313,8 +318,8 @@ def clone(pid: str, user: Principal = Depends(current_user)) -> dict:
             low = min(heights)[1]
             high = max(heights)[1]
             warnings.append(f"Einlagen unterschiedlich hoch: {min(hs):.1f} mm ({low}) bis {max(hs):.1f} mm ({high}).")
-        if p.drawer_h and max(hs) > p.drawer_h:
-            warnings.append(f"Höchste Einlage ({max(hs):.1f} mm) ist höher als die Schublade ({p.drawer_h:.0f} mm).")
+    if tops and p.drawer_h and max(tops) > p.drawer_h:
+        warnings.append(f"Höchste Einlage ({max(tops):.1f} mm) ist höher als die Schublade ({p.drawer_h:.0f} mm).")
     return {"plan": plan_info(p.drawer, plan), "pitch": PITCH, "inserts": inserts,
             "warnings": list(dict.fromkeys(warnings)), "conflicts": list(conflicts.values()),
             "heights_equal": bool(heights) and max(h for h, _ in heights) - min(h for h, _ in heights) <= 0.05}

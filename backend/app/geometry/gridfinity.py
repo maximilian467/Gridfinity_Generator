@@ -27,8 +27,12 @@ def surface_z(height_u: float) -> float:
 def make_bin(grid_x: int, grid_y: int, height_u: float, *, stacking_lip: bool = True,
              magnets: bool = False) -> cq.Workplane:
     """Massiver Bin. Mit Stapelrand: Rand-Ring über z = 7*height_u (Innenraum offen).
-    Ohne Stapelrand: bei z = 7*height_u plan abgeschnitten."""
-    box = GridfinityBox(grid_x, grid_y, height_u, solid=True, holes=magnets)
+    Ohne Stapelrand: bei z = 7*height_u plan abgeschnitten, auch unter 1 U (Blindstopfen: Fuß
+    plus dünne Deckplatte; mit Stapelrand gibt es das nicht)."""
+    if height_u < 1:
+        stacking_lip = False
+    # ohne Rand wird ohnehin abgeschnitten: höher rechnen (cq-gridfinity scheitert bei 1 U am Innenraum)
+    box = GridfinityBox(grid_x, grid_y, height_u if stacking_lip else max(height_u, 2), solid=True, holes=magnets)
     body = box.render()
     ox, oy = bin_outer(grid_x, grid_y)
     body = body.translate((ox / 2, oy / 2, 0))

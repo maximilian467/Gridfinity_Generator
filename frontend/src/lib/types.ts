@@ -49,6 +49,9 @@ export interface ObjectSpec {
 
 export interface Placement { object_id: string; x: number; y: number; rot_deg: number; side_down: 'A' | 'B' }
 export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y: number; w: number; l: number; rot_deg: number; depth_below: number; rounded?: boolean; attach?: number | null; s?: number | null; auto_length?: boolean; edge_r?: number; angle_deg?: number }
+/** Schriftzug: Mitte (x, y) in Spec-Koordinaten, size = Höhe der Großbuchstaben (mm) */
+export type TextStyle = 'raised' | 'flush' | 'engraved'
+export interface TextLabel { text: string; x: number; y: number; size: number; rot_deg: number; style: TextStyle; height: number; bold: boolean; color: string }
 export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number | null; polygon?: [number, number][] | null; generated?: boolean }
 
 export interface InsertSpec {
@@ -87,6 +90,8 @@ export interface InsertSpec {
   placements: Placement[]
   grip_recesses: GripRecess[]
   compartments: Compartment[]
+  texts?: TextLabel[]
+  blank?: boolean               // Blindstopfen: ohne Taschen/Fächer, Höhe und Stapelrand bleiben eigene Werte
   colors: { body: number; pocket: number; grip: number; compartment: number }
   color_skin: { floor: number; wall: number; show_top_ring: boolean }
   color_hex: PartColors
@@ -100,6 +105,8 @@ export interface LayoutOut {
   pieces: { placement: number; zone: number; z0: number; depth: number; polygons: PolyOut[] }[]
   grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean; params: GripRecess | null }[]
   compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; max_depth: boolean }[]
+  texts?: { index: number; style: TextStyle; z0: number; z1: number; color: string; polygons: PolyOut[] }[]
+  lip?: boolean; text_top?: number
   shift: [number, number]
   zones: { a: number; b: number; floor: number }[][]
   warnings: string[]
@@ -139,6 +146,11 @@ export interface AdminUser {
 }
 export interface AuditEntry { ts: string; actor: string; action: string; target: string; ip: string }
 
+/** Flachste Einlage (Blindstopfen), Spiegel von schemas.PLUG_MIN_H */
+export const PLUG_MIN_H = 5.5
+/** Felder, die ein Blindstopfen immer selbst bestimmt (Spiegel: schemas.BLANK_OWN_FIELDS) */
+export const BLANK_OWN_FIELDS = ['height_mm', 'stacking_lip'] as const
+
 export interface PartColors { body: string; pocket: string; grip: string; compartment: string }
 
 /** Felder, die die Projektvorlage vorgibt (Spiegel: backend schemas.TEMPLATE_FIELDS) */
@@ -168,7 +180,7 @@ export interface CloneTool {
   z_rest: number; x: number; y: number; rot_deg: number; has_texture: boolean
 }
 export interface CloneInsert {
-  id: string; name: string; colors: PartColors; overrides: string[]; placed: DrawerPlacement | null; error: string | null
+  id: string; name: string; colors: PartColors; overrides: string[]; blank?: boolean; placed: DrawerPlacement | null; error: string | null
   gx?: number; gy?: number; total_height?: number; layout?: LayoutOut; tools?: CloneTool[]; cut_union?: PolyOut[]
 }
 export interface CellConflict { cell: [number, number]; kind: 'overlap' | 'outside'; inserts: string[]; ids: string[] }

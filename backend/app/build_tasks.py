@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .schemas import BaseplateSpec, InsertSpec, ObjectSpec
+from .schemas import BaseplateSpec, InsertSpec, ObjectSpec, color_palette
 from .storage import url_for
 
 PLA_G_PER_MM3 = 1.24e-3
@@ -23,9 +23,14 @@ def build_insert_job(out_dir: str, insert_json: str, objects_json: dict[str, str
     out = Path(out_dir)
     from .storage import slots_from_colors
     spec = slots_from_colors(InsertSpec.model_validate_json(insert_json))
-    slot_hex = {getattr(spec.colors, k): getattr(spec.color_hex, k) for k in ("body", "pocket", "grip", "compartment")}
     objects = {k: ObjectSpec.model_validate_json(v) for k, v in objects_json.items()}
     res = build_insert(spec, objects)
+    # Slots lückenlos nach den Teilen, die es wirklich gibt (z. B. Blindstopfen: keine Taschenfarbe)
+    pal = color_palette(spec)
+    remap = {s: i + 1 for i, s in enumerate(sorted({p.slot for p in res.parts}))}
+    slot_hex = {remap[s]: pal[s - 1] for s in remap}
+    for p in res.parts:
+        p.slot = remap[p.slot]
     name = "einlage"
     files = {
         "3mf": write_bambu_3mf(res.parts, out / f"{name}.3mf", spec.name),

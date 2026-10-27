@@ -105,6 +105,11 @@ function InsertBody({ ins }: { ins: CloneInsert }) {
     L.pieces.forEach((p) => floor(p.polygons, p.z0, c.pocket))
     L.grips.forEach((g) => floor(g.polygons, g.z0, c.grip))
     L.compartments.forEach((q) => floor(q.polygons, q.z0, c.compartment))
+    // Schrift: erhaben als Körper, bündig/vertieft als farbige Fläche auf der Oberseite
+    for (const t of L.texts ?? []) {
+      if (t.style === 'raised') out.push({ geo: new THREE.ExtrudeGeometry(polyShapes(t.polygons), { depth: t.z1 - t.z0, bevelEnabled: false, curveSegments: 4 }), mat: mat(t.color), z: t.z0 })
+      else out.push({ geo: new THREE.ShapeGeometry(polyShapes(t.polygons), 4), mat: mat(t.color, { side: THREE.DoubleSide }), z: zs + 0.02 })
+    }
     return out
   }, [ins])
   useEffect(() => () => parts.forEach((q) => { q.geo.dispose(); (Array.isArray(q.mat) ? q.mat : [q.mat]).forEach((m) => m !== invisible && m.dispose()) }), [parts])

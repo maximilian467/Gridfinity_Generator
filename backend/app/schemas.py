@@ -9,6 +9,7 @@ Coord = Annotated[float, Field(ge=-2000, le=2000)]
 Angle = Annotated[float, Field(ge=-3600, le=3600)]
 Slot = Annotated[int, Field(ge=1, le=16)]
 Point2 = Annotated[list[float], Field(min_length=2, max_length=2)]
+Hex = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
 
 
 class Profile(BaseModel):
@@ -80,6 +81,19 @@ class Compartment(BaseModel):
     generated: bool = False                    # von 'Kästen erzeugen' angelegt (wird beim Neu-Erzeugen ersetzt)
 
 
+class TextLabel(BaseModel):
+    """Schriftzug auf der Oberfläche. Mitte (x, y) in Spec-Koordinaten (wandert mit der Zentrierung)."""
+    text: str = Field("Text", max_length=60)                   # leer: wird nicht gedruckt
+    x: Coord = 0.0
+    y: Coord = 0.0
+    size: float = Field(8.0, ge=2, le=80)            # Höhe der Großbuchstaben (mm)
+    rot_deg: Angle = 0.0
+    style: Literal["raised", "flush", "engraved"] = "raised"   # erhaben / bündig eingelegt / vertieft
+    height: float = Field(0.6, ge=0.2, le=10)        # erhaben: Höhe über der Oberfläche, sonst Tiefe
+    bold: bool = True
+    color: Hex = "#f4f1ea"
+
+
 class ColorSlots(BaseModel):
     body: Slot = 1
     pocket: Slot = 2
@@ -93,15 +107,15 @@ class ColorSkin(BaseModel):
     show_top_ring: bool = True
 
 
-Hex = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
-
-
 class PartColors(BaseModel):
     """Druckfarben je Teil (Anzeige und Zuordnung der Filament-Slots)."""
     body: Hex = "#3b3f45"
     pocket: Hex = "#f26b1d"
     grip: Hex = "#f26b1d"
     compartment: Hex = "#3b3f45"
+
+
+PLUG_MIN_H = 5.5      # flachste Einlage (Blindstopfen): Fuß bis 5,0 mm + 0,5 mm Deckplatte (darunter zerfällt sie in Einzelfüße)
 
 
 class InsertSpec(BaseModel):
@@ -112,7 +126,7 @@ class InsertSpec(BaseModel):
     grid_x: int | None = Field(None, ge=1, le=12)
     grid_y: int | None = Field(None, ge=1, le=12)
     height_u: int | None = Field(None, ge=1, le=30)
-    height_mm: float | None = Field(None, ge=10, le=250)    # feste Gesamthöhe inkl. Stapelrand (hat Vorrang)
+    height_mm: float | None = Field(None, ge=PLUG_MIN_H, le=250)   # feste Gesamthöhe inkl. Stapelrand (hat Vorrang)
     sink: float = Field(0.65, ge=0.2, le=1.0)              # Werkzeug sinkt zu diesem Anteil seiner Dicke ein
     depth_mm: float | None = Field(None, ge=1, le=200)     # Taschentiefe von Hand (hat Vorrang vor sink)
     stacking_lip: bool = True
@@ -140,6 +154,8 @@ class InsertSpec(BaseModel):
     placements: Annotated[list[Placement], Field(max_length=12)] = []
     grip_recesses: Annotated[list[GripRecess], Field(max_length=40)] = []
     compartments: Annotated[list[Compartment], Field(max_length=60)] = []
+    texts: Annotated[list[TextLabel], Field(max_length=30)] = []
+    blank: bool = False                # Blindstopfen: ohne Taschen und Fächer, eigene Höhe auch im Projekt
     colors: ColorSlots = Field(default_factory=ColorSlots)
     color_skin: ColorSkin = Field(default_factory=ColorSkin)
     color_hex: PartColors = Field(default_factory=PartColors)
@@ -165,6 +181,20 @@ TEMPLATE_FIELDS = ("height_mm", "sink", "depth_mm", "stacking_lip", "magnets", "
                    "floor_min", "min_wall", "smooth_mm", "grip_width", "grip_overhang",
                    "grip_depth_below", "comp_min_size", "comp_wall", "comp_depth", "comp_follow", "color_hex",
                    "color_skin")
+
+
+# Felder, die ein Blindstopfen immer selbst bestimmt (sonst wäre er so hoch wie die Werkzeug-Einlagen)
+BLANK_OWN_FIELDS = ("height_mm", "stacking_lip")
+
+
+def color_palette(spec: InsertSpec) -> list[str]:
+    """Druckfarben in Slot-Reihenfolge: Körper, Taschen, Mulden, Fächer, dann die Schriftfarben.
+    Gleiche Farbe = gleicher Slot (Slot = Index + 1)."""
+    out: list[str] = []
+    for h in [getattr(spec.color_hex, k) for k in ("body", "pocket", "grip", "compartment")] + [t.color for t in spec.texts]:
+        if h.lower() not in out:
+            out.append(h.lower())
+    return out
 
 
 class InsertTemplate(BaseModel):

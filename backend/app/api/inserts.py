@@ -10,7 +10,7 @@ from shapely.geometry import MultiPolygon, Polygon
 from .. import build_tasks, jobs, storage
 from ..auth import Principal, current_user
 from ..geometry.layout import compute_layout
-from ..schemas import InsertSpec
+from ..schemas import PLUG_MIN_H, InsertSpec
 
 router = APIRouter(prefix="/inserts", tags=["inserts"])
 
@@ -46,6 +46,9 @@ def layout_payload(spec: InsertSpec, user: Principal) -> dict:
                    "params": g.params.model_dump() if g.params else None} for g in lay.grips],
         "compartments": [{"z0": c.z0, "depth": lay.z_surface - c.z0, "polygons": _polys(c.poly), "auto": c.auto,
                           "max_depth": c.free_depth} for c in lay.comps],
+        "texts": [{"index": t.index, "style": t.spec.style, "z0": t.z0, "z1": t.z1, "color": t.spec.color,
+                   "polygons": _polys(t.poly)} for t in lay.texts],
+        "lip": lay.lip, "text_top": lay.text_top,
         "shift": list(lay.shift),
         "zones": [[{"a": z.a, "b": z.b, "floor": z.floor} for z in zs] for zs in lay.zones],
         "warnings": lay.warnings,
@@ -180,6 +183,35 @@ def create_bin(body: BinBody, user: Principal = Depends(current_user)) -> Insert
     ins = ins.model_copy(update={"compartments": grid_comps(ins, body.cols, body.rows, user)})
     storage.save_insert(ins)
     return ins
+
+
+class PlugBody(BaseModel):
+    name: str = Field("Blindstopfen", max_length=120)
+    grid_x: int = Field(1, ge=1, le=12)
+    grid_y: int = Field(1, ge=1, le=12)
+    height_mm: float = Field(7.0, ge=PLUG_MIN_H, le=250)
+    stacking_lip: bool = False
+    text: str = Field("", max_length=60)          # optional: Beschriftung mittig
+    project_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")
+
+
+@router.post("/plug", response_model=InsertSpec)
+def create_plug(body: PlugBody, user: Principal = Depends(current_user)) -> InsertSpec:
+    """Blindstopfen: verschließt freie Felder der Baseplate. Ohne Taschen und Fächer, Höhe frei
+    (bis hinunter auf Fuß + Deckplatte). Höhe und Stapelrand bleiben auch im Projekt eigene Werte
+    (BLANK_OWN_FIELDS), die übrigen Einstellungen (z. B. Farben, Magnete) kommen aus der Vorlage."""
+    from ..geometry.gridfinity import bin_outer
+    from ..schemas import TextLabel
+
+    texts = []
+    if body.text.strip():
+        ox, oy = bin_outer(body.grid_x, body.grid_y)
+        texts.append(TextLabel(text=body.text.strip(), x=round(ox / 2, 1), y=round(oy / 2, 1),
+                               size=min(8.0, max(round(0.3 * min(ox, oy)), 3.0))))
+    spec = InsertSpec(name=body.name.strip() or "Blindstopfen", grid_x=body.grid_x, grid_y=body.grid_y,
+                      height_mm=body.height_mm, stacking_lip=body.stacking_lip, blank=True, auto_grip=False,
+                      auto_center=False, texts=texts, project_id=body.project_id)
+    return create(spec, user)
 
 
 @router.get("", response_model=list[InsertSpec])

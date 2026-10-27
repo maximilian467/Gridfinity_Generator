@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Archive, Copy, Cube, FolderSimple, Plus, Scan, SquaresFour, Trash } from '@phosphor-icons/react'
+import { Archive, Copy, Cube, FolderSimple, Plus, Rectangle, Scan, SquaresFour, Trash } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import { Check, Empty, Msg, NumberField, Segmented, Silhouette, errText } from '../../components/ui'
 import type { InsertSpec, ProjectSpec } from '../../lib/types'
 import { NewBinForm } from '../insert/NewBinForm'
+import { NewPlugForm } from '../insert/NewPlugForm'
 
 function Projects({ showAll }: { showAll: boolean }) {
   const nav = useNavigate()
@@ -75,8 +76,9 @@ function Projects({ showAll }: { showAll: boolean }) {
   )
 }
 
-/** Inhalt einer Einlage für die Liste: Werkzeuge, sonst Fächer (Fächer-Einlage). */
+/** Inhalt einer Einlage für die Liste: Werkzeuge, sonst Fächer (Fächer-Einlage) oder Blindstopfen. */
 function contents(i: InsertSpec): string {
+  if (i.blank) return (i.texts ?? []).some((t) => t.text.trim()) ? `Blindstopfen „${i.texts!.map((t) => t.text).join(' ')}“` : 'Blindstopfen'
   if (i.placements.length || !i.compartments.length) return `${i.placements.length} Objekt(e)`
   return `${i.compartments.length} ${i.compartments.length === 1 ? 'Fach' : 'Fächer'}`
 }
@@ -109,6 +111,7 @@ export function Library() {
     onSuccess: (i) => nav(`/insert/${i.id}`),
   })
   const [binForm, setBinForm] = useState(false)
+  const [plugForm, setPlugForm] = useState(false)
   const delObj = useMutation({ mutationFn: api.deleteObject, onSuccess: refresh })
   const delIns = useMutation({ mutationFn: api.deleteInsert, onSuccess: refresh })
   const dupIns = useMutation({ mutationFn: api.duplicateInsert, onSuccess: refresh })
@@ -185,7 +188,10 @@ export function Library() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-semibold tracking-tight">Einlagen</h1>
           <div className="flex gap-2">
-            <button className={`btn ${binForm ? 'btn-on' : ''}`} onClick={() => setBinForm((v) => !v)} title="Einlage ohne Werkzeug, nur mit Fächern (Sortierkasten)">
+            <button className={`btn ${plugForm ? 'btn-on' : ''}`} onClick={() => { setPlugForm((v) => !v); setBinForm(false) }} title="Deckel für freie Felder der Baseplate, Höhe frei (auch sehr flach)">
+              <Rectangle size={16} /> Neuer Blindstopfen
+            </button>
+            <button className={`btn ${binForm ? 'btn-on' : ''}`} onClick={() => { setBinForm((v) => !v); setPlugForm(false) }} title="Einlage ohne Werkzeug, nur mit Fächern (Sortierkasten)">
               <SquaresFour size={16} /> Neue Fächer-Einlage
             </button>
             <button className="btn btn-primary" onClick={() => newInsert.mutate()} disabled={newInsert.isPending}>
@@ -193,6 +199,8 @@ export function Library() {
             </button>
           </div>
         </div>
+        {plugForm && <NewPlugForm onCancel={() => setPlugForm(false)}
+          onCreated={(i) => { qc.invalidateQueries({ queryKey: ['inserts'] }); nav(`/insert/${i.id}`) }} />}
         {binForm && <NewBinForm onCancel={() => setBinForm(false)}
           onCreated={(i) => { qc.invalidateQueries({ queryKey: ['inserts'] }); nav(`/insert/${i.id}`) }} />}
         {inserts.isPending ? (
@@ -203,7 +211,7 @@ export function Library() {
           <div className="panel divide-y" style={{ borderColor: 'var(--line)' }}>
             {inserts.data.filter((i) => match(i.project_id)).map((i) => (
               <div key={i.id} className="flex items-center gap-3 px-3 py-2">
-                {i.placements.length || !i.compartments.length ? <Cube size={18} /> : <SquaresFour size={18} />}
+                {i.blank ? <Rectangle size={18} /> : i.placements.length || !i.compartments.length ? <Cube size={18} /> : <SquaresFour size={18} />}
                 <button className="font-medium text-left flex-1 truncate bg-transparent border-0 cursor-pointer p-0"
                   style={{ color: 'var(--ink)', font: 'inherit', fontWeight: 500 }} onClick={() => nav(`/insert/${i.id}`)}>
                   {i.name}

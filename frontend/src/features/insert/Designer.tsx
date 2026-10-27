@@ -1,11 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, CheckCircle, CrosshairSimple, DownloadSimple, Plus, Rows, SquaresFour, Trash, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, CheckCircle, CrosshairSimple, DownloadSimple, Plus, Rows, SquaresFour, TextT, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
-import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec, PartColors, TemplateField } from '../../lib/types'
-import { FIELD_LABELS, TEMPLATE_FIELDS } from '../../lib/types'
-import { PartColorsEdit } from '../../components/ColorPick'
+import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec, PartColors, TemplateField, TextLabel } from '../../lib/types'
+import { BLANK_OWN_FIELDS, FIELD_LABELS, PLUG_MIN_H, TEMPLATE_FIELDS } from '../../lib/types'
+import { ColorPick, PartColorsEdit } from '../../components/ColorPick'
 import { ChunkGuard } from '../../components/ChunkGuard'
 import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
 import { arrange, placeNew } from '../../lib/placement'
@@ -22,7 +22,24 @@ function bake(sp: InsertSpec, dx: number, dy: number): InsertSpec {
     grip_recesses: sp.grip_recesses.map((g) => ({ ...g, x: round1(g.x + dx), y: round1(g.y + dy) })),
     compartments: sp.compartments.map((c) => ({ ...c, x: round1(c.x + dx), y: round1(c.y + dy),
       polygon: c.polygon ? c.polygon.map(([x, y]) => [x + dx, y + dy] as [number, number]) : c.polygon })),
+    texts: (sp.texts ?? []).map((t) => ({ ...t, x: round1(t.x + dx), y: round1(t.y + dy) })),
   }
+}
+const STYLE_LABELS: Record<TextLabel['style'], string> = { raised: 'Erhaben', flush: 'Bündig', engraved: 'Vertieft' }
+
+/** Neuer Schriftzug: mittig, bei Werkzeug im breiteren freien Streifen ober- oder unterhalb der Taschen. */
+function newText(spec: InsertSpec, lay: LayoutOut | undefined): TextLabel {
+  const [ox, oy] = lay?.outer ?? [41.5, 41.5]
+  const [sx, sy] = lay?.shift ?? [0, 0]
+  const size = Math.max(3, Math.min(8, Math.round(0.3 * Math.min(ox, oy))))
+  let cy = oy / 2
+  const ys = [...(lay?.pieces ?? []), ...(lay?.grips ?? [])].flatMap((p) => p.polygons.flatMap((q) => q.exterior.map((c) => c[1])))
+  if (ys.length) {
+    const lo = Math.min(...ys) - 2.6, hi = oy - 2.6 - Math.max(...ys)          // freie Streifen unten / oben
+    if (Math.max(lo, hi) >= size + 3) cy = hi >= lo ? oy - 2.6 - hi / 2 : 2.6 + lo / 2
+  }
+  return { text: spec.name.slice(0, 24) || 'Text', x: round1(ox / 2 - sx), y: round1(cy - sy), size, rot_deg: 0,
+    style: 'raised', height: 0.6, bold: true, color: '#f4f1ea' }
 }
 const round1 = (v: number) => Math.round(v * 10) / 10
 /** Wert für die Rückfrage lesbar machen */
@@ -92,7 +109,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
     const tpl = proj.data?.template as Record<string, unknown> | undefined
     if (tpl) {
       const fields = (Object.keys(p) as TemplateField[]).filter((k) => (TEMPLATE_FIELDS as readonly string[]).includes(k)
-        && !(spec.overrides ?? []).includes(k) && JSON.stringify((p as Record<string, unknown>)[k]) !== JSON.stringify(tpl[k]))
+        && !(spec.overrides ?? []).includes(k) && !(spec.blank && (BLANK_OWN_FIELDS as readonly string[]).includes(k)) && JSON.stringify((p as Record<string, unknown>)[k]) !== JSON.stringify(tpl[k]))
       if (fields.length) { setPending({ p, fields }); setShake((n) => n + 1); return }
     }
     setSpec((s) => ({ ...s, ...p }))
@@ -179,6 +196,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         const nx = round1(x + dx), ny = round1(y + dy)
         return { ...p, x: nx, y: ny, polygon: p.polygon ? p.polygon.map(([qx, qy]) => [qx + nx - p.x, qy + ny - p.y] as [number, number]) : p.polygon }
       }) }
+      if (s.kind === 'text') return { ...sp, texts: (sp.texts ?? []).map((t, i) => (i === s.index ? { ...t, x: round1(x + dx), y: round1(y + dy) } : t)) }
       return sp
     })
   }
@@ -235,7 +253,12 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
     mutationFn: () => api.compartmentGrid({ ...spec, auto_compartments: false }, grid.cols, grid.rows),
     onSuccess: (r) => { setCompMsg(null); patch({ auto_compartments: false, compartments: r.compartments }); select(null) },
   })
-  const hasContent = spec.placements.length > 0 || spec.compartments.length > 0
+  const hasContent = spec.placements.length > 0 || spec.compartments.length > 0 || !!spec.blank
+  const addText = () => {
+    const t = newText(spec, lay)
+    setSpec((s) => ({ ...s, texts: [...(s.texts ?? []), t] }))
+    setSel({ kind: 'text', index: (spec.texts ?? []).length })
+  }
 
   // Entf-Taste löscht das ausgewählte Element
   useEffect(() => {
@@ -248,6 +271,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
         placements: sel.kind === 'placement' ? s.placements.filter((_, i) => i !== sel.index) : s.placements,
         grip_recesses: sel.kind === 'grip' ? s.grip_recesses.filter((_, i) => i !== sel.index) : s.grip_recesses,
         compartments: sel.kind === 'comp' ? s.compartments.filter((_, i) => !(compSel.length ? compSel : [sel.index]).includes(i)) : s.compartments,
+        texts: sel.kind === 'text' ? (s.texts ?? []).filter((_, i) => i !== sel.index) : s.texts,
       }))
       select(null)
     }
@@ -294,7 +318,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
           {proj.data && (
             <div className="panel p-2 grid gap-1.5" style={{ background: 'var(--accent-soft)', borderColor: 'transparent' }}>
               <div className="text-sm">Projekt <button className="btn btn-sm" onClick={() => nav(`/project/${proj.data!.id}`)}>{proj.data.name}</button></div>
-              <div className="hint mt-0">Einstellungen kommen aus der Projektvorlage. {ownFields.length ? 'Eigene Werte:' : 'Keine eigenen Werte.'}</div>
+              <div className="hint mt-0">Einstellungen kommen aus der Projektvorlage.{spec.blank ? ' Höhe und Stapelrand bestimmt der Blindstopfen selbst.' : ''} {ownFields.length ? 'Eigene Werte:' : 'Keine eigenen Werte.'}</div>
               {ownFields.map((f) => (
                 <div key={f} className="flex items-center gap-2 text-sm">
                   <span className="flex-1">{FIELD_LABELS[f]}</span>
@@ -303,7 +327,22 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               ))}
             </div>
           )}
-          <h3 className="sect">Größe</h3>
+          <h3 className="sect">{spec.blank ? 'Blindstopfen' : 'Größe'}</h3>
+          {spec.blank ? <>
+            <div className="hint mt-0">Verschließt freie Felder der Baseplate. Ab {PLUG_MIN_H.toFixed(1).replace('.', ',')} mm hoch: 5 mm Fuß, darüber die Deckplatte.
+              Höhe und Stapelrand bleiben auch im Projekt eigene Werte.</div>
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField label="Breite" unit="E" step={1} min={1} max={12} value={spec.grid_x ?? 1} onChange={(v) => patch({ grid_x: Math.min(Math.max(Math.round(v) || 1, 1), 12) })} />
+              <NumberField label="Tiefe" unit="E" step={1} min={1} max={12} value={spec.grid_y ?? 1} onChange={(v) => patch({ grid_y: Math.min(Math.max(Math.round(v) || 1, 1), 12) })} />
+            </div>
+            <NumberField label="Gesamthöhe" step={0.5} min={PLUG_MIN_H} max={250} value={spec.height_mm ?? 7}
+              onChange={(v) => patch({ height_mm: Math.max(v, PLUG_MIN_H), height_u: null })}
+              hint={spec.stacking_lip ? 'inkl. Stapelrand (3,8 mm), mit Rand mindestens 10,8 mm' : 'ohne Schrift'} />
+            <div className="flex gap-1 flex-wrap">
+              {[PLUG_MIN_H, 7, 10, 14].map((h) => <button key={h} className={`btn btn-sm ${spec.height_mm === h ? 'btn-on' : ''}`} onClick={() => patch({ height_mm: h, height_u: null })}>{String(h).replace('.', ',')} mm</button>)}
+              {stdH !== null && <button className="btn btn-sm" onClick={() => patch({ height_mm: stdH, height_u: null })} title="So hoch wie die übrigen Einlagen">Standardhöhe</button>}
+            </div>
+          </> : <>
           <div className="hint mt-0">Automatisch: kleinstes Raster und kleinste Höhe, in die alles passt.</div>
           <Check label="Raster automatisch" checked={spec.grid_x === null}
             onChange={(v) => patch(v ? { grid_x: null, grid_y: null } : { grid_x: lay?.grid_x ?? 3, grid_y: lay?.grid_y ?? 3 })} />
@@ -333,6 +372,8 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <NumberField label="Höhe" unit="U (7 mm)" step={1} min={1} value={spec.height_u} onChange={(v) => patch({ height_u: Math.round(v) })} />
           )}
           {lay && <div className="num hint">{lay.grid_x} x {lay.grid_y} Einheiten, {lay.total_height.toFixed(1)} mm hoch</div>}
+          </>}
+          {!spec.blank && <>
           <div className="grid gap-1 mt-1">
             <span className="label mb-0">Taschentiefe</span>
             <Segmented value={spec.depth_mm != null ? 'mm' : 'pct'}
@@ -353,10 +394,25 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
               value={(pending?.p.depth_mm as number | undefined) ?? spec.depth_mm} onChange={(v) => patch({ depth_mm: v })}
               hint="So tief liegt die tiefste Stelle jedes Werkzeugs unter der Oberfläche (dazu kommt der Bodenabstand). Gilt für alle Werkzeuge dieser Einlage." />
           )}
+          </>}
           <Check label="Stapelrand" checked={spec.stacking_lip} onChange={(v) => patch({ stacking_lip: v })} />
           <Check label="Magnetlöcher" checked={spec.magnets} onChange={(v) => patch({ magnets: v })} />
         </section>
 
+        <section className="grid gap-2">
+          <h3 className="sect">Schrift</h3>
+          <div className="hint mt-0">Schriftzüge auf der Oberfläche, in eigener Farbe. Im Layout verschieben, anklicken zum Einstellen (Text, Größe, Winkel, Höhe).</div>
+          {(spec.texts ?? []).map((t, i) => (
+            <button key={i} className={`btn btn-sm justify-between ${sel?.kind === 'text' && sel.index === i ? 'btn-on' : ''}`} onClick={() => select({ kind: 'text', index: i })}>
+              <span className="truncate">{t.text}</span>
+              <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--ink-2)' }}>{STYLE_LABELS[t.style]}
+                <span className="swatch" style={{ width: 12, height: 12, background: t.color }} /></span>
+            </button>
+          ))}
+          <button className="btn btn-sm justify-self-start" onClick={addText} disabled={(spec.texts ?? []).length >= 30}><TextT size={14} /> Schriftzug hinzufügen</button>
+        </section>
+
+        {!spec.blank && <>
         <section className="grid gap-2">
           <h3 className="sect">Automatik</h3>
           <Check label="Inhalt mittig ausrichten" checked={spec.auto_center} onChange={(v) => patch({ auto_center: v })} />
@@ -431,15 +487,19 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <NumberField label="Min. Wand" value={spec.min_wall} step={0.1} min={0.4} onChange={(v) => patch({ min_wall: v })} />
           </div>
         </details>
+        </>}
 
         <section className="grid gap-2">
           <h3 className="sect">Farben</h3>
-          <PartColorsEdit value={spec.color_hex ?? DEFAULT_COLORS} onChange={(v: PartColors) => patch({ color_hex: v })} />
+          <PartColorsEdit value={spec.color_hex ?? DEFAULT_COLORS} onChange={(v: PartColors) => patch({ color_hex: v })} parts={spec.blank ? ['body'] : undefined} />
+          {(spec.texts ?? []).length > 0 && <div className="hint mt-0">Schriftfarben stellst du am Schriftzug ein; jede weitere Farbe bekommt einen eigenen Slot.</div>}
+          {!spec.blank && <>
           <div className="grid grid-cols-2 gap-2">
             <NumberField label="Haut Boden" value={spec.color_skin.floor} step={0.1} min={0.2} onChange={(v) => patch({ color_skin: { ...spec.color_skin, floor: v } })} />
             <NumberField label="Haut Wand" value={spec.color_skin.wall} step={0.1} min={0.2} onChange={(v) => patch({ color_skin: { ...spec.color_skin, wall: v } })} />
           </div>
           <Check label="Farbring oben" checked={spec.color_skin.show_top_ring} onChange={(v) => patch({ color_skin: { ...spec.color_skin, show_top_ring: v } })} />
+          </>}
         </section>
       </aside>
 
@@ -457,6 +517,9 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
 
         {tab === 'layout' && (
           <div className="flex flex-wrap items-center gap-2 panel p-2">
+            <button className="btn btn-sm" onClick={addText} title="Schriftzug auf die Oberfläche setzen"><TextT size={14} /> Schrift</button>
+            {!spec.blank && <>
+            <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             {usable.length > 0 && (
               <select className="input" style={{ width: 210 }} value="" onChange={(e) => e.target.value && addObject(e.target.value)} aria-label="Objekt hinzufügen">
                 <option value="">+ Objekt hinzufügen …</option>
@@ -473,12 +536,16 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
             <button className={`btn btn-sm ${spec.auto_center ? 'btn-on' : ''}`} onClick={centerNow} title="Inhalt mittig in die Einlage setzen und dort halten">
               <CrosshairSimple size={14} /> Mittig{spec.auto_center ? ' (aktiv)' : ''}
             </button>
+            </>}
 
           </div>
         )}
 
         {tab === 'layout' && (
           <>
+            {spec.blank && !(spec.texts ?? []).length && (
+              <Msg kind="info">Blindstopfen ohne Werkzeug und Fächer. Links Höhe wählen, oben über „Schrift“ eine Beschriftung aufsetzen.</Msg>
+            )}
             {usable.length === 0 && objects.isSuccess && !hasContent && (
               <Msg kind="warn">Es gibt noch kein fertig gescanntes Objekt. In der Bibliothek ein Objekt scannen oder die Demo-Zange anlegen.
                 <button className="btn btn-sm ml-2" onClick={() => nav('/')}>Zur Bibliothek</button></Msg>
@@ -660,6 +727,7 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
       placements: sel.kind === 'placement' ? s.placements.filter((_, i) => i !== sel.index) : s.placements,
       grip_recesses: sel.kind === 'grip' ? s.grip_recesses.filter((_, i) => i !== sel.index) : s.grip_recesses,
       compartments: sel.kind === 'comp' ? s.compartments.filter((_, i) => i !== sel.index) : s.compartments,
+      texts: sel.kind === 'text' ? (s.texts ?? []).filter((_, i) => i !== sel.index) : s.texts,
     }))
     onSel(null)
   }
@@ -763,9 +831,52 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
       </div>
     )
   }
+  if (sel.kind === 'text') {
+    const t = (spec.texts ?? [])[sel.index]
+    if (!t) return null
+    const upd = (q: Partial<TextLabel>) => setSpec((s) => ({ ...s, texts: (s.texts ?? []).map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
+    const lt = lay?.texts?.find((q) => q.index === sel.index)
+    const rot = (d: number) => upd({ rot_deg: Math.round(((((t.rot_deg + d) % 360) + 540) % 360) - 180) })
+    return (
+      <div className="grid gap-2">
+        <h3 className="sect">Schriftzug</h3>
+        <Field label="Text"><input className="input" value={t.text} maxLength={60} onChange={(e) => upd({ text: e.target.value })} /></Field>
+        {!t.text.trim() && <div className="hint mt-0" style={{ color: 'var(--err)' }}>Ohne Text wird nichts gedruckt.</div>}
+        <Segmented value={t.style} onChange={(v) => upd({ style: v, height: v === 'raised' ? Math.min(t.height, 2) : t.height })}
+          options={(['raised', 'flush', 'engraved'] as const).map((v) => ({ value: v, label: STYLE_LABELS[v] }))} />
+        <div className="hint mt-0">{t.style === 'raised' ? 'Steht über der Oberfläche, ganz in der Schriftfarbe.'
+          : t.style === 'flush' ? 'Bündig mit der Oberfläche: nur die obersten Schichten in der Schriftfarbe (glatt, ideal für Mehrfarbdruck).'
+          : 'In die Oberfläche vertieft, der Boden der Vertiefung in der Schriftfarbe.'}</div>
+        <div className="grid grid-cols-2 gap-2">
+          <NumberField label="Schriftgröße" value={t.size} step={0.5} min={2} max={80} onChange={(v) => upd({ size: Math.min(Math.max(v, 2), 80) })} hint="Höhe der Großbuchstaben" />
+          <NumberField label={t.style === 'raised' ? 'Höhe' : 'Tiefe'} value={t.height} step={0.2} min={0.2} max={10}
+            onChange={(v) => upd({ height: Math.min(Math.max(v, 0.2), 10) })}
+            hint={lt && Math.abs((lt.z1 - lt.z0) - t.height) > 0.05 ? `tatsächlich ${(lt.z1 - lt.z0).toFixed(1).replace('.', ',')} mm` : t.style === 'raised' ? 'über der Oberfläche' : 'unter der Oberfläche'} />
+        </div>
+        <label className="grid gap-1">
+          <span className="label mb-0">Winkel <span className="num">{Math.round(t.rot_deg)}°</span><span className="hint"> (gegen den Uhrzeigersinn)</span></span>
+          <input type="range" min={-180} max={180} step={1} value={t.rot_deg} onChange={(e) => upd({ rot_deg: +e.target.value })} />
+        </label>
+        <div className="flex gap-1 flex-wrap">
+          {[-90, -15, 15, 90].map((d) => <button key={d} className="btn btn-sm" onClick={() => rot(d)}>{d > 0 ? '+' : ''}{d}°</button>)}
+          <button className="btn btn-sm" onClick={() => upd({ rot_deg: 0 })} disabled={!t.rot_deg}>Gerade (0°)</button>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <NumberField label="X (Mitte)" value={t.x} step={0.5} onChange={(v) => upd({ x: v })} />
+          <NumberField label="Y (Mitte)" value={t.y} step={0.5} onChange={(v) => upd({ y: v })} />
+        </div>
+        <Check label="Fett" checked={t.bold} onChange={(v) => upd({ bold: v })} />
+        <ColorPick label="Schriftfarbe" value={t.color} onChange={(v) => upd({ color: v })} />
+        {t.color.toLowerCase() === (spec.color_hex?.body ?? '').toLowerCase() && t.style !== 'engraved' &&
+          <div className="hint mt-0">Gleiche Farbe wie der Körper: die Schrift ist nur als Relief zu sehen.</div>}
+        <div className="hint mt-0">Schrift endet mit {String(1.2).replace('.', ',')} mm Abstand vor Taschen, Mulden, Fächern und dem Rand; was darüber ragt, wird abgeschnitten.</div>
+        {del}
+      </div>
+    )
+  }
   const c = spec.compartments[sel.index]
   if (!c) return null
-  const lc = lay?.compartments.filter((q) => !q.auto)[sel.index]
+  const lc =lay?.compartments.filter((q) => !q.auto)[sel.index]
   const maxDepth = lc ? lc.depth : null
   const upd = (q: Partial<Compartment>) => setSpec((s) => ({ ...s, compartments: s.compartments.map((x, i) => (i === sel.index ? { ...x, ...q } : x)) }))
   if (c.polygon) return (

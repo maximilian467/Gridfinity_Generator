@@ -9,8 +9,8 @@ from shapely import affinity, contains_xy
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
 
-from ..schemas import Compartment, GripRecess, InsertSpec, ObjectSpec
-from .gridfinity import FOOT_H, LIP_H, LIP_MARGIN, PITCH, UNIT_H, bin_outer, surface_z
+from ..schemas import PLUG_MIN_H, Compartment, GripRecess, InsertSpec, ObjectSpec, TextLabel
+from .gridfinity import BIN_RADIUS, FOOT_H, LIP_H, LIP_MARGIN, PITCH, UNIT_H, bin_outer, surface_z
 from .zones import Zone, compute_zones, zones_from_levels
 
 
@@ -46,6 +46,18 @@ class Comp:
 
 
 @dataclass
+class Label:
+    poly: object                    # Schriftfläche (nach dem Zuschnitt auf die freie Oberfläche)
+    spec: TextLabel
+    index: int
+    z0: float = 0.0                 # erhaben: Oberfläche; bündig/vertieft: Boden der Schrift
+    z1: float = 0.0                 # erhaben: Oberkante der Schrift; sonst Oberfläche
+
+
+TEXT_GAP = 1.2       # Abstand der Schrift zu Taschen, Mulden und Fächern (Farbhaut 0,8 mm passt dazwischen)
+
+
+@dataclass
 class Layout:
     grid_x: int
     grid_y: int
@@ -57,6 +69,8 @@ class Layout:
     pieces: list[Piece] = field(default_factory=list)
     grips: list[Grip] = field(default_factory=list)
     comps: list[Comp] = field(default_factory=list)
+    texts: list[Label] = field(default_factory=list)
+    lip: bool = True                                   # Stapelrand tatsächlich vorhanden
     zones: list[list[Zone]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     shift: tuple[float, float] = (0.0, 0.0)      # Verschiebung durch Zentrierung (auf alle Spec-Positionen)
@@ -69,6 +83,21 @@ class Layout:
     def inner(self):
         ox, oy = self.outer
         return box(LIP_MARGIN, LIP_MARGIN, ox - LIP_MARGIN, oy - LIP_MARGIN)
+
+    @property
+    def top_face(self):
+        """Ebene Oberfläche, auf der Schrift liegen kann: innerhalb des Stapelrands bzw. ganz
+        (ohne Rand, abgerundete Ecken) mit etwas Abstand zur Außenkante."""
+        if self.lip:
+            return self.inner
+        ox, oy = self.outer
+        r = BIN_RADIUS
+        return box(r, r, ox - r, oy - r).buffer(r - 0.8, quad_segs=8)
+
+    @property
+    def text_top(self) -> float:
+        """Höchster Punkt inkl. erhabener Schrift."""
+        return max([self.total_height] + [t.z1 for t in self.texts if t.spec.style == "raised"])
 
     def pocket_union(self):
         return unary_union([p.poly for p in self.pieces])
@@ -267,7 +296,8 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
               reduce: float = 0.0) -> Layout:
     """reduce: Tiefe, um die alle Werkzeuge flacher eingesetzt werden (feste Gesamthöhe)."""
     zs = surface_z(u)
-    lay = Layout(gx, gy, u, zs, total_height=zs + (LIP_H if spec.stacking_lip else 0.0))
+    lip = spec.stacking_lip and u >= 1 - 1e-9          # flacher als 1 U (Blindstopfen): ohne Stapelrand
+    lay = Layout(gx, gy, u, zs, total_height=zs + (LIP_H if lip else 0.0), lip=lip)
     margin = spec.clearance_xy + spec.clearance_end
     auto_grips: list[tuple[GripRecess, int]] = []
     outlines: dict[int, object] = {}
@@ -327,6 +357,9 @@ def _assemble(spec: InsertSpec, objects: dict[str, ObjectSpec], gx: int, gy: int
                               free_depth=c.depth is None))
     for g in lay.grips:
         g.z_top = zs
+    from .text import text_polygon
+    for i, t in enumerate(spec.texts):
+        lay.texts.append(Label(text_polygon(t), t, i))
     return lay
 
 
@@ -338,6 +371,8 @@ def _translate_layout(lay: Layout, dx: float, dy: float) -> None:
         g.axis = affinity.translate(g.axis, dx, dy)
     for c in lay.comps:
         c.poly = affinity.translate(c.poly, dx, dy)
+    for t in lay.texts:
+        t.poly = affinity.translate(t.poly, dx, dy)
     lay.shift = (lay.shift[0] + dx, lay.shift[1] + dy)
 
 
@@ -400,8 +435,13 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
     if spec.height_mm is not None:
         # feste Gesamthöhe (inkl. Stapelrand) bleibt fest: passt das Werkzeug nicht, sitzt es flacher;
         # Greifmulden und Fächer werden flacher. Je Fall ein Hinweis mit der Höhe, die nötig wäre.
-        u = max((spec.height_mm - (LIP_H if spec.stacking_lip else 0.0)) / UNIT_H, 1.0)
+        # mit Stapelrand mindestens 1 U, ohne bis hinunter zum Blindstopfen (Fuß + Deckplatte)
+        u_min = 1.0 if spec.stacking_lip else PLUG_MIN_H / UNIT_H
+        u = max((spec.height_mm - (LIP_H if spec.stacking_lip else 0.0)) / UNIT_H, u_min)
         lay = _assemble(spec, objects, gx, gy, u)
+        if lay.total_height > spec.height_mm + 0.05:
+            lay.warnings.append(f"Mit Stapelrand ist die Einlage mindestens {lay.total_height:.1f} mm hoch. "
+                                "Für eine flachere Einlage den Stapelrand ausschalten.")
         short = need - min((p.z0 for p in lay.pieces), default=1e9)
         if short > 1e-6 and spec.placements:
             lay = _assemble(spec, objects, gx, gy, u, reduce=short)
@@ -431,8 +471,55 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
         for poly in auto_compartments(lay, spec):
             depth = spec.comp_depth if spec.comp_depth else lay.z_surface - need
             lay.comps.append(Comp(poly, max(lay.z_surface - depth, need), 3.0, auto=True))
+    _fit_texts(lay, spec, need)
     _check(lay, spec)
     return lay
+
+
+STYLE_NAMES = {"raised": "erhaben", "flush": "bündig", "engraved": "vertieft"}
+
+
+def _fit_texts(lay: Layout, spec: InsertSpec, need: float) -> None:
+    """Schrift auf die freie Oberfläche zuschneiden (nicht über Taschen, Mulden, Fächer oder den
+    Rand) und Höhen festlegen; vertiefte/bündige Schrift endet spätestens auf dem Mindestboden."""
+    if not lay.texts:
+        return
+    zs = lay.z_surface
+    occ = [p.poly for p in lay.pieces] + [g.poly for g in lay.grips] + [c.poly for c in lay.comps]
+    free = lay.top_face
+    if occ:
+        free = free.difference(unary_union(occ).buffer(TEXT_GAP, join_style=1))
+    keep: list[Label] = []
+    for t in lay.texts:
+        name = f"Schrift „{t.spec.text}“"
+        if not t.spec.text.strip():               # noch leer (wird gerade getippt): einfach weglassen
+            continue
+        if t.poly.is_empty:
+            lay.warnings.append(f"{name}: keine darstellbaren Zeichen")
+            continue
+        clipped = t.poly.intersection(free)
+        if clipped.is_empty or clipped.area < 0.05 * t.poly.area:
+            lay.warnings.append(f"{name} liegt nicht auf der freien Oberfläche (Tasche, Fach oder Rand) und entfällt.")
+            continue
+        if clipped.area < 0.99 * t.poly.area:
+            lay.warnings.append(f"{name} ragt über eine Tasche, ein Fach oder den Rand und wird dort abgeschnitten.")
+        t.poly = MultiPolygon(_polys(clipped)) if not isinstance(clipped, (Polygon, MultiPolygon)) else clipped
+        h = t.spec.height
+        if t.spec.style == "raised":
+            t.z0, t.z1 = zs, zs + h
+        else:
+            # vertieft: darunter bleibt der Mindestboden; bündig ändert nur die Farbe (kein Loch)
+            d = min(h, zs - need if t.spec.style == "engraved" else zs - 1.0)
+            if d < 0.2:
+                lay.warnings.append(f"{name}: Einlage zu flach für {STYLE_NAMES[t.spec.style]}e Schrift, sie entfällt.")
+                continue
+            if d < h - 1e-6:
+                lay.warnings.append(f"{name}: nur {d:.1f} mm statt {h:.1f} mm tief, darunter bleibt der Mindestboden.")
+            t.z0, t.z1 = zs - d, zs
+        keep.append(t)
+    lay.texts = keep
+    if lay.lip and any(t.spec.style == "raised" for t in keep):
+        lay.warnings.append("Erhabene Schrift: ein daraufgestellter Bin steht auf der Schrift (nicht mehr bündig stapelbar).")
 
 
 # ---- Automatische Kästen ------------------------------------------------------------
@@ -566,7 +653,7 @@ def _check(lay: Layout, spec: InsertSpec) -> None:
                 lay.warnings.append(f"Wand zwischen {a[0]} und {b[0]} < {spec.min_wall} mm")
 
 
-__all__ = ["Layout", "Piece", "Grip", "Comp", "compute_layout", "pocket_outline", "grip_polygon",
+__all__ = ["Layout", "Piece", "Grip", "Comp", "Label", "compute_layout", "pocket_outline", "grip_polygon",
            "comp_polygon", "auto_compartments", "grid_compartments", "balance_point", "MultiPolygon"]
 
 
