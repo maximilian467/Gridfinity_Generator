@@ -106,3 +106,25 @@ def write_plain_3mf(parts, path: Path, name: str = "Einlage") -> Path:
         z.writestr("_rels/.rels", RELS)
         z.writestr("3D/3dmodel.model", model)
     return path
+
+
+def write_objects_3mf(objs: list[tuple[str, object, tuple[float, float]]], path: Path) -> Path:
+    """Standard-3MF mit getrennten Objekten (z. B. Baseplate-Kacheln): (Name, Workplane, Lage x/y).
+    Jedes Objekt behält seine Koordinaten (Unterkante z = 0) und steht an seiner Lage; das Ganze wird
+    auf die Druckplatte mittig gesetzt (Slicer ordnen ohnehin neu an, wenn es nicht passt)."""
+    ms = [part_mesh(shape) for _, shape, _ in objs]
+    lo = np.min([m.vertices.min(axis=0) + (x, y, 0) for m, (_, _, (x, y)) in zip(ms, objs)], axis=0)
+    hi = np.max([m.vertices.max(axis=0) + (x, y, 0) for m, (_, _, (x, y)) in zip(ms, objs)], axis=0)
+    cx, cy = 128 - (lo[0] + hi[0]) / 2, 128 - (lo[1] + hi[1]) / 2
+    res = "".join(f'<object id="{i + 1}" name={quoteattr(n)} type="model">{_mesh_xml(m)}</object>'
+                  for i, ((n, _, _), m) in enumerate(zip(objs, ms)))
+    items = "".join(f'<item objectid="{i + 1}" transform="1 0 0 0 1 0 0 0 1 {x + cx:.4f} {y + cy:.4f} {-m.vertices[:, 2].min():.4f}"/>'
+                    for i, ((_, _, (x, y)), m) in enumerate(zip(objs, ms)))
+    model = (f'<?xml version="1.0" encoding="UTF-8"?>\n<model unit="millimeter" xmlns="{NS}">'
+             f"<resources>{res}</resources><build>{items}</build></model>")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", CT)
+        z.writestr("_rels/.rels", RELS)
+        z.writestr("3D/3dmodel.model", model)
+    return path

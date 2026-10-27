@@ -312,3 +312,18 @@ def test_member_cannot_build_with_tools_from_elsewhere(team):
     assert r.status_code == 404
     r = b.post(f"/api/inserts/{ins['id']}/build", json={**ins, "placements": [{"object_id": foreign["id"]}]})
     assert r.status_code == 404
+
+
+def test_admin_sees_and_assigns_projects_of_a_user(team):
+    admin, pid = team["admin"], team["p"]["id"]
+    assert admin.get(f"/api/admin/users/{team['c_id']}/projects").json() == []
+    assert admin.post(f"/api/projects/{pid}/members", json={"email": team["c_mail"]}).status_code == 200
+    got = admin.get(f"/api/admin/users/{team['c_id']}/projects").json()
+    assert [(p["id"], p["role"]) for p in got] == [(pid, "member")]
+    owner = admin.get(f"/api/admin/users/{team['a_id']}/projects").json()
+    assert (pid, "owner") in [(p["id"], p["role"]) for p in owner]
+    users = {u["id"]: u for u in admin.get("/api/admin/users").json()}
+    assert users[team["c_id"]]["projects"] == 1
+    assert team["a"].get(f"/api/admin/users/{team['c_id']}/projects").status_code == 403
+    assert admin.delete(f"/api/projects/{pid}/members/{team['c_id']}").status_code == 200
+    assert admin.get(f"/api/admin/users/{team['c_id']}/projects").json() == []

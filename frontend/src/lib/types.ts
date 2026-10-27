@@ -142,7 +142,7 @@ export interface AuthConfig { auth: boolean; google: boolean; local: boolean; so
 export interface AdminUser {
   id: number; email: string; name: string; role: 'admin' | 'user'; status: 'pending' | 'active' | 'disabled'
   google: boolean; created_at: string; last_login_at: string | null; approved_at: string | null
-  objects: number; inserts: number
+  objects: number; inserts: number; projects?: number
 }
 export interface AuditEntry { ts: string; actor: string; action: string; target: string; ip: string }
 

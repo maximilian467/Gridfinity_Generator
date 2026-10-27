@@ -60,7 +60,7 @@ export function usePlatePlan(spec: BaseplateSpec | undefined) {
   })
 }
 
-/** Kacheln als STL erzeugen und herunterladen */
+/** Kacheln erzeugen und herunterladen: STL (ZIP), 3MF (alle Kacheln), STEP (ganze Baseplate) */
 export function PlateBuild({ spec, disabled }: { spec: BaseplateSpec; disabled?: boolean }) {
   const [jobId, setJobId] = useState<string | null>(null)
   const build = useMutation({ mutationFn: () => api.buildBaseplate(spec), onSuccess: (r) => setJobId(r.job_id) })
@@ -72,14 +72,18 @@ export function PlateBuild({ spec, disabled }: { spec: BaseplateSpec; disabled?:
   return (
     <div className="grid gap-2">
       <button className="btn btn-primary justify-center" disabled={disabled || build.isPending || job.data?.status === 'running'} onClick={() => build.mutate()}>
-        {job.data?.status === 'running' ? 'Erzeuge …' : done ? 'Kacheln neu erzeugen' : 'Kacheln erzeugen (STL)'}
+        {job.data?.status === 'running' ? 'Erzeuge …' : done ? 'Kacheln neu erzeugen' : 'Kacheln erzeugen (STL, 3MF, STEP)'}
       </button>
       {build.isError && <Msg kind="err">{errText(build.error)}</Msg>}
       {job.data?.status === 'error' && <Msg kind="err">{job.data.error}</Msg>}
-      {done && (
-        <a className="btn justify-center no-underline" style={{ color: 'var(--ink)' }} href={done.outputs.zip} download="baseplate_kacheln.zip">
-          <DownloadSimple size={16} /> STL der Kacheln (ZIP)</a>
-      )}
+      {done && ([
+        ['3mf', 'baseplate.3mf', '3MF (alle Kacheln, zum Drucken)'],
+        ['zip', 'baseplate_kacheln.zip', 'STL der Kacheln (ZIP)'],
+        ['step', 'baseplate.step', 'STEP (ganze Baseplate, für CAD)'],
+      ] as const).filter(([k]) => done.outputs[k]).map(([k, file, label]) => (
+        <a key={k} className="btn justify-center no-underline" style={{ color: 'var(--ink)' }} href={done.outputs[k]} download={file}>
+          <DownloadSimple size={16} /> {label}</a>
+      ))}
       {done && <Msgs items={done.warnings} />}
     </div>
   )

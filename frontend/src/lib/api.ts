@@ -35,6 +35,7 @@ export const api = {
     req<AdminUser>(`/admin/users/${id}`, json('PUT', body)),
   deleteUser: (id: number) => req<{ ok: boolean; removed: number }>(`/admin/users/${id}`, json('DELETE')),
   audit: () => req<AuditEntry[]>('/admin/audit?limit=60'),
+  userProjects: (id: number) => req<{ id: string; name: string; role: 'owner' | 'member'; archived: boolean }[]>(`/admin/users/${id}/projects`),
   objects: (all = false, shared = false) => req<ObjectSpec[]>('/objects' + listQuery(all, shared)),
   object: (id: string) => req<ObjectSpec>(`/objects/${id}`),
   createObject: (name: string) => req<ObjectSpec>('/objects', json('POST', { name })),

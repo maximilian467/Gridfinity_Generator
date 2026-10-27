@@ -17,20 +17,24 @@ ORDER = {"pending": 0, "active": 1, "disabled": 2}
 
 
 def _out(u: User, counts: dict[int, list[int]]) -> dict:
-    c = counts.get(u.id, [0, 0])
+    c = counts.get(u.id, [0, 0, 0])
     return {"id": u.id, "email": u.email, "name": u.name, "role": u.role, "status": u.status,
             "google": u.google_sub is not None, "created_at": u.created_at, "last_login_at": u.last_login_at,
-            "approved_at": u.approved_at, "objects": c[0], "inserts": c[1]}
+            "approved_at": u.approved_at, "objects": c[0], "inserts": c[1], "projects": c[2]}
 
 
 def _counts() -> dict[int, list[int]]:
+    """Je Nutzer: [Objekte, Einlagen, beteiligte Projekte (eigene und als Mitglied)]."""
     counts: dict[int, list[int]] = {}
+    for us in storage.participation().values():
+        for uid in us:
+            counts.setdefault(uid, [0, 0, 0])[2] += 1
     for o in storage._read_objects():
         if o.owner_id is not None:
-            counts.setdefault(o.owner_id, [0, 0])[0] += 1
+            counts.setdefault(o.owner_id, [0, 0, 0])[0] += 1
     for i in storage._read_inserts():
         if i.owner_id is not None:
-            counts.setdefault(i.owner_id, [0, 0])[1] += 1
+            counts.setdefault(i.owner_id, [0, 0, 0])[1] += 1
     return counts
 
 
@@ -95,6 +99,19 @@ def delete_user(uid: int, request: Request, me: Principal = Depends(require_admi
     removed = storage.delete_user_data(uid)
     auth.audit("delete_user", f"{email} ({removed} Einträge)", me.id, auth.client_ip(request))
     return {"ok": True, "removed": removed}
+
+
+@router.get("/users/{uid}/projects")
+def user_projects(uid: int, _: Principal = Depends(require_admin)) -> list[dict]:
+    """Projekte, an denen der Nutzer beteiligt ist (Besitzer oder Mitglied). Hinzufügen und Entfernen
+    laufen über /projects/{pid}/members (Admins dürfen dort bei jedem Projekt)."""
+    mine = storage.member_projects(uid)
+    out = []
+    for p in storage._read_projects():
+        if p.owner_id == uid or p.id in mine:
+            out.append({"id": p.id, "name": p.name, "role": "owner" if p.owner_id == uid else "member",
+                        "archived": p.archived})
+    return sorted(out, key=lambda p: (p["archived"], p["role"] != "owner", p["name"].lower()))
 
 
 @router.get("/audit")

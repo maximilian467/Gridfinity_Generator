@@ -18,7 +18,9 @@ import cadquery as cq
 from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
+from ..export.step import export_step
 from ..export.stl import export_stl
+from ..export.threemf_bambu import write_objects_3mf
 from ..schemas import BaseplateSpec
 from .gridfinity import PITCH
 
@@ -206,18 +208,31 @@ def tile_plan_svg(spec: BaseplateSpec, plan: PlatePlan) -> str:
     return "".join(out)
 
 
+TILE_GAP = 5.0            # mm zwischen den Kacheln im 3MF
+
+
 def build_baseplate_files(spec: BaseplateSpec, out: Path) -> tuple[dict[str, Path], dict]:
     plan = plan_plate(spec)
     warnings = []
     if spec.magnets:
         warnings.append("Magnetlöcher werden für Baseplates noch nicht erzeugt")
     zpath = out / "baseplate_kacheln.zip"
+    tiles = [(t, make_tile(plan, t)) for t in plan.tiles]
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-        for t in plan.tiles:
-            f = export_stl(make_tile(plan, t), out / f"kachel_{t.n}.stl")
+        for t, shape in tiles:
+            f = export_stl(shape, out / f"kachel_{t.n}.stl")
             z.write(f, f"kachel_{t.n}_{len(t.cells)}_zellen.stl")
+    # STEP: ganze Baseplate, jede Kachel an ihrer Stelle in der Schublade (für CAD)
+    asm = cq.Assembly(name="Baseplate")
+    for t, shape in tiles:
+        asm.add(shape, name=f"Kachel {t.n}", loc=cq.Location(cq.Vector(t.bounds[0], t.bounds[1], 0)),
+                color=cq.Color(0.8, 0.8, 0.82))
+    step = export_step(asm, out / "baseplate.step")
+    # 3MF: alle Kacheln als eigene Objekte, wie in der Schublade mit 5 mm Abstand (zum Drucken)
+    tmf = write_objects_3mf([(f"Kachel {t.n}", shape, (t.bounds[0] + TILE_GAP * t.ix, t.bounds[1] + TILE_GAP * t.iy))
+                             for t, shape in tiles], out / "baseplate.3mf")
     svg = out / "kachelplan.svg"
     svg.write_text(tile_plan_svg(spec, plan), encoding="utf-8")
     info = plan_info(spec, plan)
     info.update(warnings=warnings)
-    return {"zip": zpath, "plan": svg}, info
+    return {"zip": zpath, "step": step, "3mf": tmf, "plan": svg}, info

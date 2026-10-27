@@ -78,3 +78,39 @@ def test_tile_split_by_disabled_cells_becomes_separate_tiles():
     # 3 x 1 Zellen auf einer Kachel, Mitte abgewählt -> zwei getrennte Kacheln
     plan = plan_plate(BaseplateSpec(drawer_x=127, drawer_y=43, clearance=0.5, disabled=[[1, 0]]))
     assert len(plan.tiles) == 2 and all(len(t.cells) == 1 for t in plan.tiles)
+
+
+def test_baseplate_export_step_and_3mf(tmp_path):
+    """STEP: ganze Baseplate (Kacheln an ihrer Stelle), 3MF: jede Kachel ein eigenes Objekt, getrennt."""
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    import cadquery as cq
+    import numpy as np
+
+    from app.geometry.baseplate import build_baseplate_files
+    spec = BaseplateSpec(drawer_x=260, drawer_y=140, bed_x=180, bed_y=180, clearance=0.5)
+    files, info = build_baseplate_files(spec, tmp_path)
+    plan = plan_plate(spec)
+    n = len(plan.tiles)
+    assert n >= 2 and set(files) == {"zip", "step", "3mf", "plan"}
+    step = cq.importers.importStep(str(files["step"]))
+    assert len(step.solids().vals()) == n
+    bb = step.val().BoundingBox()
+    assert (bb.xmin, bb.ymin, bb.xmax, bb.ymax) == pytest.approx((0.5, 0.5, 259.5, 139.5), abs=0.05)
+    assert (bb.zmin, bb.zmax) == pytest.approx((0, 4.75), abs=0.05)
+    ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    root = ET.fromstring(zipfile.ZipFile(files["3mf"]).read("3D/3dmodel.model"))
+    objs = root.findall(".//m:object", ns)
+    items = root.findall(".//m:item", ns)
+    assert len(objs) == len(items) == n
+    boxes = []
+    for o, it in zip(objs, items):
+        v = np.array([[float(e.get(k)) for k in "xyz"] for e in o.iter(f"{{{ns['m']}}}vertex")])
+        t = [float(x) for x in it.get("transform").split()][9:]
+        v = v + t
+        assert v[:, 2].min() == pytest.approx(0, abs=1e-3) and v[:, 2].max() == pytest.approx(4.75, abs=0.05)
+        boxes.append((v[:, 0].min(), v[:, 1].min(), v[:, 0].max(), v[:, 1].max()))
+    for i, a in enumerate(boxes):                       # Kacheln überlappen sich nicht (5 mm Abstand)
+        for b in boxes[i + 1:]:
+            assert a[2] + 4.9 < b[0] or b[2] + 4.9 < a[0] or a[3] + 4.9 < b[1] or b[3] + 4.9 < a[1]
