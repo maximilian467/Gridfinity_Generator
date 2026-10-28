@@ -142,3 +142,13 @@ def test_attached_grip_can_be_angled():
     # Werkzeug um 90° gedreht: quer zur Achse = x-Richtung; 30° schräg dreht die Mulde mit
     assert abs(((out[30.0][0] - out[0.0][0]) + 180) % 360 - 180) == pytest.approx(30, abs=0.5)
     assert out[30.0][1] > out[0.0][1]                 # schräge Sehne ist länger
+
+
+def test_angled_grip_across_two_legs():
+    # schräge Sehne schneidet zwei getrennte Schenkel (MultiLineString) -> kein Absturz, ganze Breite
+    from shapely.geometry import box
+    from app.geometry.layout import grip_across_angled
+    legs = box(0, -20, 100, -10).union(box(0, 10, 100, 20))
+    cx, cy, L = grip_across_angled(legs, 50, 0, 22.0, 10, 0)
+    assert L == pytest.approx(40 / math.cos(math.radians(22)), abs=0.01)
+    assert (cx, cy) == (pytest.approx(50, abs=0.01), pytest.approx(0, abs=0.01))

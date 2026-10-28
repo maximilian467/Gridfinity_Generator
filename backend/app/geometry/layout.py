@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
+import shapely
 from shapely import affinity, contains_xy
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
@@ -232,8 +233,8 @@ def grip_across_angled(outline, sg: float, yc: float, angle_deg: float, width: f
     cut = LineString([(sg - dx * R, yc - dy * R), (sg + dx * R, yc + dy * R)]).intersection(outline)
     if cut.is_empty:
         return sg, yc, width
-    ts = [(x - sg) * dx + (y - yc) * dy for x, y in (cut.coords if hasattr(cut, "coords") and cut.geom_type == "LineString"
-                                                    else [c for g in getattr(cut, "geoms", []) for c in g.coords])]
+    # Sehne kann mehrteilig sein (z. B. zwei Zangenschenkel); .coords wirft bei Multi-Geometrien
+    ts = [(x - sg) * dx + (y - yc) * dy for x, y in shapely.get_coordinates(cut)]
     lo, hi = min(ts), max(ts)
     m = (lo + hi) / 2
     return sg + dx * m, yc + dy * m, max((hi - lo) + 2 * overhang, width)
