@@ -1012,10 +1012,12 @@ function CompLabelEdit({ value, onChange }: { value: CompLabel | null; onChange:
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="Schriftgröße" value={lb.size ?? 0} step={0.5} min={0} max={40} onChange={(v) => upd({ size: v >= 2 ? v : null })}
             hint={lb.size == null ? 'passend' : 'Versalhöhe'} />
-          <NumberField label="Höhe" value={lb.height} step={0.2} min={0.2} max={5} onChange={(v) => upd({ height: v })} hint="erhaben" />
+          <NumberField label={(lb.style ?? 'raised') === 'raised' ? 'Höhe' : 'Tiefe'} value={lb.height} step={0.2} min={0.2} max={5} onChange={(v) => upd({ height: v })} />
           <NumberField label="Versatz X" value={lb.dx} step={0.5} onChange={(v) => upd({ dx: v })} />
           <NumberField label="Versatz Y" value={lb.dy} step={0.5} onChange={(v) => upd({ dy: v })} />
         </div>
+        <Segmented value={lb.style ?? 'raised'} onChange={(v) => upd({ style: v })}
+          options={[{ value: 'raised', label: 'erhaben' }, { value: 'flush', label: 'bündig' }, { value: 'engraved', label: 'vertieft' }]} />
         <Check label="Fett" checked={lb.bold} onChange={(v) => upd({ bold: v })} />
         <ColorPick label="Schriftfarbe" value={lb.color} onChange={(v) => upd({ color: v })} />
       </>}

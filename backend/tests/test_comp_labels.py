@@ -85,3 +85,31 @@ def test_label_rotation_stays_centered_and_fits(rot):
 def text_area(t):
     from app.geometry.text import text_polygon
     return text_polygon(t.spec).area
+
+
+def test_free_text_over_compartment_lands_on_its_floor():
+    """Schriftzug (Werkzeug 'Schrift') über einem Fach entfällt nicht, sondern liegt auf dem Fachboden."""
+    from app.schemas import TextLabel
+    spec = _bin([None, None], gx=4, gy=4)
+    lay0 = compute_layout(spec, {})
+    c = lay0.comps[0].poly.centroid
+    spec = spec.model_copy(update={"texts": [TextLabel(text="Kugelschreiber", x=c.x, y=c.y, size=10, rot_deg=90)]})
+    lay = compute_layout(spec, {})
+    assert len(lay.texts) == 1 and not any("entfällt" in w for w in lay.warnings)
+    t = lay.texts[0]
+    assert t.z0 == pytest.approx(lay.comps[0].z0) and lay.comps[0].poly.contains(t.poly)
+
+
+@pytest.mark.parametrize("style", ["engraved", "flush"])
+def test_label_styles_one_body_and_colored_top(style):
+    spec = _bin([CompLabel(text="M3", style=style, height=1.0, color="#ffcc00"),
+                 CompLabel(text="M4", style=style, shelf=True, color="#ffcc00")])
+    lay = compute_layout(spec, {})
+    assert len(lay.comp_labels) == 2
+    for t in lay.comp_labels:
+        assert t.z1 > t.z0 and t.spec.style == style
+    r = build_insert(spec, {})
+    assert r.checks.valid and r.checks.watertight and r.checks.solid_count == 1 and r.volume_sum_ok
+    text = [p for p in r.parts if p.group == "text"][0].shape.val()
+    floor_label = lay.comp_labels[0]
+    assert text.BoundingBox().zmax >= floor_label.z1 - 0.05                     # farbig bis in die oberste Schicht

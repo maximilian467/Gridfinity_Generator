@@ -29,17 +29,18 @@ def _text_regions(lay: Layout, spec: InsertSpec) -> dict[str, list[cq.Shape]]:
     from .insert_cad import RAISED_SEAT
 
     out: dict[str, list[cq.Shape]] = {}
-    for t in lay.texts:
+    for t in lay.all_texts:
         st = t.spec.style
         if st == "raised":
             z0, z1 = t.z0 - RAISED_SEAT, t.z1 + 1.0
         elif st == "flush":
             z0, z1 = t.z0, t.z1 + 1.0
         else:
-            z0, z1 = t.z0 - spec.color_skin.floor, t.z1 + 1.0
+            # vertieft: Boden und Wände der Vertiefung bis in die obersten Schichten (Schrift bleibt von oben farbig)
+            reg = t.poly.buffer(spec.color_skin.wall, join_style=1)
+            out.setdefault(t.spec.color.lower(), []).extend(prism(reg, t.z0 - spec.color_skin.floor, t.z1 + 1.0))
+            continue
         out.setdefault(t.spec.color.lower(), []).extend(prism(t.poly, z0, z1))
-    for t in lay.comp_labels:              # Fachbeschriftung: immer erhaben
-        out.setdefault(t.spec.color.lower(), []).extend(prism(t.poly, t.z0 - RAISED_SEAT, t.z1 + 1.0))
     return out
 
 

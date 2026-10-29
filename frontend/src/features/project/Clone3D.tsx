@@ -139,7 +139,7 @@ function InsertBody({ ins }: { ins: CloneInsert }) {
     // Schrift: erhaben als Körper, bündig/vertieft als farbige Fläche auf der Oberseite
     for (const t of L.texts ?? []) {
       if (t.style === 'raised') out.push({ geo: new THREE.ExtrudeGeometry(polyShapes(t.polygons), { depth: t.z1 - t.z0, bevelEnabled: false, curveSegments: 4 }), mat: mat(t.color), z: t.z0 })
-      else out.push({ geo: new THREE.ShapeGeometry(polyShapes(t.polygons), 4), mat: mat(t.color, { side: THREE.DoubleSide }), z: zs + 0.02 })
+      else out.push({ geo: new THREE.ShapeGeometry(polyShapes(t.polygons), 4), mat: mat(t.color, { side: THREE.DoubleSide }), z: t.z1 + 0.02 })
     }
     // Vordächer (Farbe der Fächer) und Fachbeschriftungen (immer erhaben)
     for (const sh of L.shelves ?? []) {
@@ -148,7 +148,8 @@ function InsertBody({ ins }: { ins: CloneInsert }) {
       if (geo) out.push({ geo, mat: mat(c.compartment, { side: THREE.DoubleSide }), z: 0 })
     }
     for (const t of L.comp_labels ?? [])
-      out.push({ geo: new THREE.ExtrudeGeometry(polyShapes(t.polygons), { depth: t.z1 - t.z0, bevelEnabled: false, curveSegments: 4 }), mat: mat(t.color), z: t.z0 })
+      if (t.style && t.style !== 'raised') out.push({ geo: new THREE.ShapeGeometry(polyShapes(t.polygons), 4), mat: mat(t.color, { side: THREE.DoubleSide }), z: t.z1 + 0.02 })
+      else out.push({ geo: new THREE.ExtrudeGeometry(polyShapes(t.polygons), { depth: t.z1 - t.z0, bevelEnabled: false, curveSegments: 4 }), mat: mat(t.color), z: t.z0 })
     return out
   }, [ins])
   useEffect(() => () => parts.forEach((q) => { q.geo.dispose(); (Array.isArray(q.mat) ? q.mat : [q.mat]).forEach((m) => m !== invisible && m.dispose()) }), [parts])

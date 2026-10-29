@@ -48,7 +48,7 @@ def layout_payload(spec: InsertSpec, user: Principal) -> dict:
                           "max_depth": c.free_depth} for c in lay.comps],
         "texts": [{"index": t.index, "style": t.spec.style, "z0": t.z0, "z1": t.z1, "color": t.spec.color,
                    "polygons": _polys(t.poly)} for t in lay.texts],
-        "comp_labels": [{"index": t.index, "z0": t.z0, "z1": t.z1, "color": t.spec.color, "size": t.spec.size,
+        "comp_labels": [{"index": t.index, "z0": t.z0, "z1": t.z1, "color": t.spec.color, "size": t.spec.size, "style": t.spec.style,
                          "polygons": _polys(t.poly)} for t in lay.comp_labels],
         "shelves": [{"index": sh.comp, "side": sh.side, "z_top": sh.z_top, "polygons": _polys(sh.poly)}
                     for sh in lay.shelves],

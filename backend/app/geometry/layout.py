@@ -85,7 +85,7 @@ class Layout:
     grips: list[Grip] = field(default_factory=list)
     comps: list[Comp] = field(default_factory=list)
     texts: list[Label] = field(default_factory=list)
-    comp_labels: list[Label] = field(default_factory=list)   # Fachbeschriftungen (erhaben, Index = Fach)
+    comp_labels: list[Label] = field(default_factory=list)   # Fachbeschriftungen (Index = Fach)
     shelves: list[Shelf] = field(default_factory=list)
     lip: bool = True                                   # Stapelrand tatsächlich vorhanden
     zones: list[list[Zone]] = field(default_factory=list)
@@ -114,8 +114,12 @@ class Layout:
     @property
     def text_top(self) -> float:
         """Höchster Punkt inkl. erhabener Schrift."""
-        return max([self.total_height] + [t.z1 for t in self.texts if t.spec.style == "raised"]
-                   + [t.z1 for t in self.comp_labels])
+        return max([self.total_height] + [t.z1 for t in self.all_texts if t.spec.style == "raised"])
+
+    @property
+    def all_texts(self) -> list[Label]:
+        """Schriftzüge und Fachbeschriftungen (für CAD und Farbteile gleich behandelt)."""
+        return self.texts + self.comp_labels
 
     def pocket_union(self):
         return unary_union([p.poly for p in self.pieces])
@@ -498,6 +502,26 @@ def compute_layout(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> Layout:
 STYLE_NAMES = {"raised": "erhaben", "flush": "bündig", "engraved": "vertieft"}
 
 
+def _text_z(t: Label, base: float, floor: float, name: str, warnings: list[str]) -> bool:
+    """Höhen einer Schrift auf der Fläche in Höhe base: erhaben darüber, vertieft/bündig darunter
+    (höchstens bis floor; bündig ändert nur die Farbe der obersten Schichten). False = entfällt."""
+    h = t.spec.height
+    if t.spec.style == "raised":
+        t.z0, t.z1 = base, base + h
+        return True
+    d = min(h, base - floor if t.spec.style == "engraved" else base - 1.0)
+    if d < 0.2:
+        warnings.append(f"{name}: zu flach für {STYLE_NAMES[t.spec.style]}e Schrift, sie entfällt.")
+        return False
+    if d < h - 1e-6:
+        warnings.append(f"{name}: nur {d:.1f} mm statt {h:.1f} mm tief, darunter bleibt der Mindestboden.")
+    t.z0, t.z1 = base - d, base
+    return True
+
+
+FLOOR_UNDER_TEXT = FOOT_H + 0.6     # vertiefte Schrift im Fachboden: darunter bleibt mindestens so viel
+
+
 def _fit_texts(lay: Layout, spec: InsertSpec, need: float) -> None:
     """Schrift auf die freie Oberfläche zuschneiden (nicht über Taschen, Mulden, Fächer oder den
     Rand) und Höhen festlegen; vertiefte/bündige Schrift endet spätestens auf dem Mindestboden."""
@@ -517,27 +541,28 @@ def _fit_texts(lay: Layout, spec: InsertSpec, need: float) -> None:
             lay.warnings.append(f"{name}: keine darstellbaren Zeichen")
             continue
         clipped = t.poly.intersection(free)
+        base, floor = zs, need
         if clipped.is_empty or clipped.area < 0.05 * t.poly.area:
-            lay.warnings.append(f"{name} liegt nicht auf der freien Oberfläche (Tasche, Fach oder Rand) und entfällt.")
-            continue
-        if clipped.area < 0.99 * t.poly.area:
+            # über einem Fach: Schrift kommt auf dessen Boden (z. B. Beschriftung in Fächer-Einlagen)
+            c = next((c for c in lay.comps if c.poly.contains(t.poly.centroid)), None)
+            if c is None:
+                lay.warnings.append(f"{name} liegt nicht auf der freien Oberfläche (Tasche, Fach oder Rand) und entfällt.")
+                continue
+            clipped = t.poly.intersection(c.poly.buffer(-LABEL_INSET))
+            base, floor = c.z0, FLOOR_UNDER_TEXT
+            if clipped.is_empty:
+                lay.warnings.append(f"{name}: Fach zu klein für die Schrift, sie entfällt.")
+                continue
+            if clipped.area < 0.99 * t.poly.area:
+                lay.warnings.append(f"{name} ragt über den Rand des Fachs und wird abgeschnitten.")
+        elif clipped.area < 0.99 * t.poly.area:
             lay.warnings.append(f"{name} ragt über eine Tasche, ein Fach oder den Rand und wird dort abgeschnitten.")
         t.poly = MultiPolygon(_polys(clipped)) if not isinstance(clipped, (Polygon, MultiPolygon)) else clipped
-        h = t.spec.height
-        if t.spec.style == "raised":
-            t.z0, t.z1 = zs, zs + h
-        else:
-            # vertieft: darunter bleibt der Mindestboden; bündig ändert nur die Farbe (kein Loch)
-            d = min(h, zs - need if t.spec.style == "engraved" else zs - 1.0)
-            if d < 0.2:
-                lay.warnings.append(f"{name}: Einlage zu flach für {STYLE_NAMES[t.spec.style]}e Schrift, sie entfällt.")
-                continue
-            if d < h - 1e-6:
-                lay.warnings.append(f"{name}: nur {d:.1f} mm statt {h:.1f} mm tief, darunter bleibt der Mindestboden.")
-            t.z0, t.z1 = zs - d, zs
+        if not _text_z(t, base, floor, name, lay.warnings):
+            continue
         keep.append(t)
     lay.texts = keep
-    if lay.lip and any(t.spec.style == "raised" for t in keep):
+    if lay.lip and any(t.spec.style == "raised" and t.z0 >= zs - 1e-6 for t in keep):
         lay.warnings.append("Erhabene Schrift: ein daraufgestellter Bin steht auf der Schrift (nicht mehr bündig stapelbar).")
 
 
@@ -569,7 +594,8 @@ def _comp_labels(lay: Layout) -> None:
         if lb.shelf:
             d = min(lb.shelf_depth, 0.6 * min(c.poly.bounds[2] - c.poly.bounds[0], c.poly.bounds[3] - c.poly.bounds[1]))
             region = _strip(c.poly, lb.side, d)
-            z_top = zs - h                         # Schrift endet bündig mit der Oberfläche (stapelbar)
+            # erhabene Schrift endet bündig mit der Oberfläche (stapelbar), vertiefte/bündige liegt im Vordach
+            z_top = zs - h if lb.style == "raised" else zs
             if z_top - SHELF_T < c.z0 + 1.0:
                 lay.warnings.append(f"{name}: Fach zu flach für ein Vordach, es entfällt.")
                 continue
@@ -596,7 +622,7 @@ def _comp_labels(lay: Layout) -> None:
                 lay.warnings.append(f"{name}: „{text}“ ist zu lang für das Fach und wird sehr klein ({size:.1f} mm).")
                 size = max(size, 2.0)
         cx, cy = area.centroid.x if not lb.shelf else (x0 + x1) / 2, area.centroid.y if not lb.shelf else (y0 + y1) / 2
-        t = TextLabel(text=text, x=cx + lb.dx, y=cy + lb.dy, size=min(size, 40.0), rot_deg=rot, style="raised",
+        t = TextLabel(text=text, x=cx + lb.dx, y=cy + lb.dy, size=min(size, 40.0), rot_deg=rot, style=lb.style,
                       height=lb.height, bold=lb.bold, color=lb.color)
         poly = text_polygon(t)
         if not poly.is_empty:                     # gedreht: Mitte der sichtbaren Schrift, nicht der Zeile
@@ -609,7 +635,10 @@ def _comp_labels(lay: Layout) -> None:
         if clipped.area < 0.99 * poly.area:
             lay.warnings.append(f"{name} ragt über das Fach bzw. Vordach und wird abgeschnitten.")
         clipped = MultiPolygon(_polys(clipped)) if not isinstance(clipped, (Polygon, MultiPolygon)) else clipped
-        lay.comp_labels.append(Label(clipped, t, c.index, z0, z0 + h))
+        lab = Label(clipped, t, c.index)
+        floor = z0 - SHELF_T + 0.6 if lb.shelf else FLOOR_UNDER_TEXT
+        if _text_z(lab, z0, floor, name, lay.warnings):
+            lay.comp_labels.append(lab)
 
 
 # ---- Automatische Kästen ------------------------------------------------------------

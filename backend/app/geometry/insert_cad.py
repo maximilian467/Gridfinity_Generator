@@ -43,7 +43,7 @@ def cutter_groups(lay: Layout) -> dict[str, list[cq.Shape]]:
         g["grip"] += grip_cutter(gr, top)
     for c in lay.comps:
         g["compartment"] += prism(c.poly, c.z0, top)
-    for t in lay.texts:
+    for t in lay.all_texts:
         if t.spec.style == "engraved":
             g["text"] += prism(t.poly, t.z0, top)
     return g
@@ -54,7 +54,7 @@ RAISED_SEAT = 0.2      # erhabene Schrift reicht so weit in die Oberfläche (sic
 
 def raised_text(lay: Layout) -> list[cq.Shape]:
     out: list[cq.Shape] = []
-    for t in lay.texts:
+    for t in lay.all_texts:
         if t.spec.style == "raised":
             out += prism(t.poly, t.z0 - RAISED_SEAT, t.z1)
     return out
@@ -96,8 +96,6 @@ def build_insert(spec: InsertSpec, objects: dict[str, ObjectSpec]) -> InsertResu
     adds = raised_text(lay)
     for sh in lay.shelves:
         adds += shelf_solid(sh)
-    for t in lay.comp_labels:
-        adds += prism(t.poly, t.z0 - RAISED_SEAT, t.z1)
     add = fuse_all(adds)
     if add is not None:
         body = body.union(add).clean()

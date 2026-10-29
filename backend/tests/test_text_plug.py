@@ -79,7 +79,7 @@ def test_text_cad_styles_one_body_and_own_color(style):
         assert solid.isInside(cq.Vector(pt.x, pt.y, zs - 0.5))
     else:
         assert not solid.isInside(cq.Vector(pt.x, pt.y, zs - 0.5))       # vertieft: offen
-        assert tb.zmax == pytest.approx(zs - 1.0, abs=0.05)               # Farbe am Boden der Schrift
+        assert tb.zmax == pytest.approx(zs, abs=0.05)                     # Farbe am Boden und an den Wänden bis oben
         assert tb.zmin == pytest.approx(zs - 1.0 - spec.color_skin.floor, abs=0.05)
 
 

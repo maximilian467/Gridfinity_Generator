@@ -76,7 +76,8 @@ class CompLabel(BaseModel):
     text: str = Field("", max_length=40)             # leer: nichts gedruckt (Vordach bleibt, z. B. für Etiketten)
     size: float | None = Field(None, ge=2, le=40)    # Versalhöhe; None = passend zum Fach bzw. Vordach
     bold: bool = True
-    height: float = Field(0.6, ge=0.2, le=5)         # erhaben
+    height: float = Field(0.6, ge=0.2, le=5)         # erhaben: Höhe, sonst Tiefe
+    style: Literal["raised", "flush", "engraved"] = "raised"
     color: Hex = "#f4f1ea"
     shelf: bool = False                              # Vordach mit der Beschriftung obendrauf
     shelf_depth: float = Field(12.0, ge=5, le=40)    # Tiefe des Vordachs (von der hinteren Wand)

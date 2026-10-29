@@ -55,7 +55,7 @@ export interface TextLabel { text: string; x: number; y: number; size: number; r
 export type ShelfSide = 'back' | 'front' | 'left' | 'right'
 /** Fachbeschriftung: mittig auf dem Fachboden oder auf einem Vordach an einer Wand (size null = passend) */
 export interface CompLabel {
-  text: string; size: number | null; bold: boolean; height: number; color: string
+  text: string; size: number | null; bold: boolean; height: number; style?: TextStyle; color: string
   shelf: boolean; shelf_depth: number; side: ShelfSide; rot_deg?: number; dx: number; dy: number
 }
 export const DEFAULT_COMP_LABEL: CompLabel = { text: '', size: null, bold: true, height: 0.6, color: '#f4f1ea', shelf: false, shelf_depth: 12, side: 'back', rot_deg: 0, dx: 0, dy: 0 }
@@ -113,7 +113,7 @@ export interface LayoutOut {
   grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean; params: GripRecess | null }[]
   compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; max_depth: boolean }[]
   texts?: { index: number; style: TextStyle; z0: number; z1: number; color: string; polygons: PolyOut[] }[]
-  comp_labels?: { index: number; z0: number; z1: number; color: string; size: number; polygons: PolyOut[] }[]
+  comp_labels?: { index: number; z0: number; z1: number; color: string; size: number; style?: TextStyle; polygons: PolyOut[] }[]
   shelves?: { index: number; side: ShelfSide; z_top: number; polygons: PolyOut[] }[]
   lip?: boolean; text_top?: number
   shift: [number, number]
