@@ -86,3 +86,4 @@ ihren Einlagen, eine Mustervorlage für die Einstellungen und eine 2D/3D-Ansicht
     Oberkante liegt um die Schrifthöhe unter der Oberfläche, so bleibt die Einlage stapelbar. Ohne Größe passt sich die
     Schrift an (Breite bzw. 60 % der Vordachtiefe). Schrift-Farbteile werden vor den Fächern zugeteilt, sonst nähme
     die Fächerhaut sie mit. Fächer-Einlage anlegen: `labels` (Lesereihenfolge hinten links zuerst) und `shelf`.
+    Im 3D-Klon der Schublade zeichnet `Clone3D.shelfGeometry` das Vordach mit demselben Profil.

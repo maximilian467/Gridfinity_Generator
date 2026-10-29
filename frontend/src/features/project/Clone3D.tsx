@@ -5,7 +5,7 @@ import * as THREE from 'three'
 import { api } from '../../lib/api'
 import { Segmented } from '../../components/ui'
 import { ThreeGuard } from '../../components/ThreeGuard'
-import type { CloneData, CloneInsert, CloneTool, PolyOut, TextureInfo } from '../../lib/types'
+import type { CloneData, CloneInsert, CloneTool, PolyOut, ShelfSide, TextureInfo } from '../../lib/types'
 
 /** Digitaler Klon der Schublade: Baseplate, Einlagen (vereinfachte Geometrie aus dem Layout) und auf Wunsch
  *  die Werkzeuge als Low-Poly-Körper mit dem Foto der Oberseite als Farbe. Einheiten mm, z nach oben (CAD). */
@@ -72,6 +72,37 @@ function Plate({ data }: { data: CloneData }) {
 }
 
 /** Eine Einlage in eigenen Koordinaten (0..außen), oben offen mit Taschen, Mulden und Fächern */
+const SHELF_T = 1.6     // wie layout.SHELF_T: Stärke der Vorderkante
+
+/** Vordach als Prisma entlang der Wand: oben eben, vorn SHELF_T stark, darunter 45° zur Wand (wie im CAD). */
+function shelfGeometry(polys: PolyOut[], side: ShelfSide, zTop: number, zFloor: number): THREE.BufferGeometry | null {
+  const pts = polys.flatMap((p) => p.exterior)
+  if (!pts.length) return null
+  const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1])
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys)
+  const along = side === 'back' || side === 'front'
+  const d = along ? y1 - y0 : x1 - x0
+  const zb = Math.max(zTop - SHELF_T - d, zFloor)
+  // Profil (Abstand von der Wand u, Höhe z), an beiden Enden der Wand
+  const prof: [number, number][] = [[0, zTop], [d, zTop], [d, zTop - SHELF_T], [0, zb]]
+  const at = (u: number, z: number, end: 0 | 1): number[] => {
+    if (side === 'back') return [end ? x1 : x0, y1 - u, z]
+    if (side === 'front') return [end ? x1 : x0, y0 + u, z]
+    if (side === 'left') return [x0 + u, end ? y1 : y0, z]
+    return [x1 - u, end ? y1 : y0, z]
+  }
+  const a = prof.map(([u, z]) => at(u, z, 0)), b = prof.map(([u, z]) => at(u, z, 1))
+  const tri: number[][] = [a[0], a[1], a[2], a[0], a[2], a[3], b[0], b[2], b[1], b[0], b[3], b[2]]
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4
+    tri.push(a[i], b[i], b[j], a[i], b[j], a[j])
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(tri.flat(), 3))
+  geo.computeVertexNormals()
+  return geo
+}
+
 function InsertBody({ ins }: { ins: CloneInsert }) {
   const parts = useMemo(() => {
     const L = ins.layout!
@@ -110,6 +141,14 @@ function InsertBody({ ins }: { ins: CloneInsert }) {
       if (t.style === 'raised') out.push({ geo: new THREE.ExtrudeGeometry(polyShapes(t.polygons), { depth: t.z1 - t.z0, bevelEnabled: false, curveSegments: 4 }), mat: mat(t.color), z: t.z0 })
       else out.push({ geo: new THREE.ShapeGeometry(polyShapes(t.polygons), 4), mat: mat(t.color, { side: THREE.DoubleSide }), z: zs + 0.02 })
     }
+    // Vordächer (Farbe der Fächer) und Fachbeschriftungen (immer erhaben)
+    for (const sh of L.shelves ?? []) {
+      const comp = L.compartments.filter((q) => !q.auto)[sh.index]
+      const geo = shelfGeometry(sh.polygons, sh.side, sh.z_top, comp ? comp.z0 : 0)
+      if (geo) out.push({ geo, mat: mat(c.compartment, { side: THREE.DoubleSide }), z: 0 })
+    }
+    for (const t of L.comp_labels ?? [])
+      out.push({ geo: new THREE.ExtrudeGeometry(polyShapes(t.polygons), { depth: t.z1 - t.z0, bevelEnabled: false, curveSegments: 4 }), mat: mat(t.color), z: t.z0 })
     return out
   }, [ins])
   useEffect(() => () => parts.forEach((q) => { q.geo.dispose(); (Array.isArray(q.mat) ? q.mat : [q.mat]).forEach((m) => m !== invisible && m.dispose()) }), [parts])
