@@ -56,9 +56,9 @@ export type ShelfSide = 'back' | 'front' | 'left' | 'right'
 /** Fachbeschriftung: mittig auf dem Fachboden oder auf einem Vordach an einer Wand (size null = passend) */
 export interface CompLabel {
   text: string; size: number | null; bold: boolean; height: number; color: string
-  shelf: boolean; shelf_depth: number; side: ShelfSide; dx: number; dy: number
+  shelf: boolean; shelf_depth: number; side: ShelfSide; rot_deg?: number; dx: number; dy: number
 }
-export const DEFAULT_COMP_LABEL: CompLabel = { text: '', size: null, bold: true, height: 0.6, color: '#f4f1ea', shelf: false, shelf_depth: 12, side: 'back', dx: 0, dy: 0 }
+export const DEFAULT_COMP_LABEL: CompLabel = { text: '', size: null, bold: true, height: 0.6, color: '#f4f1ea', shelf: false, shelf_depth: 12, side: 'back', rot_deg: 0, dx: 0, dy: 0 }
 export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number | null; polygon?: [number, number][] | null; generated?: boolean; label?: CompLabel | null }
 
 export interface InsertSpec {

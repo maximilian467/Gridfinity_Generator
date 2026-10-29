@@ -584,11 +584,14 @@ def _comp_labels(lay: Layout) -> None:
             lay.warnings.append(f"{name}: kein Platz für Schrift.")
             continue
         x0, y0, x1, y1 = area.bounds
-        along, across = (y1 - y0, x1 - x0) if rot else (x1 - x0, y1 - y0)
+        rot += lb.rot_deg                          # eigener Winkel (z. B. 90° in schmalen Fächern)
         size = lb.size
         if size is None:
-            w1 = text_polygon(TextLabel(text=text, size=10, bold=lb.bold)).bounds
-            size = min(0.9 * along * 10 / max(w1[2] - w1[0], 1e-6), 0.6 * across if lb.shelf else min(0.35 * across, 12.0))
+            # Ausmaß bei Größe 10 und diesem Winkel, in das Fach bzw. Vordach einpassen
+            b = text_polygon(TextLabel(text=text, size=10, rot_deg=rot, bold=lb.bold)).bounds
+            bw, bh = max(b[2] - b[0], 1e-6), max(b[3] - b[1], 1e-6)
+            cap = 0.6 * min(x1 - x0, y1 - y0) if lb.shelf else min(0.35 * min(x1 - x0, y1 - y0), 12.0)
+            size = min(9 * (x1 - x0) / bw, 9 * (y1 - y0) / bh, cap)
             if size < LABEL_MIN:
                 lay.warnings.append(f"{name}: „{text}“ ist zu lang für das Fach und wird sehr klein ({size:.1f} mm).")
                 size = max(size, 2.0)
@@ -596,6 +599,9 @@ def _comp_labels(lay: Layout) -> None:
         t = TextLabel(text=text, x=cx + lb.dx, y=cy + lb.dy, size=min(size, 40.0), rot_deg=rot, style="raised",
                       height=lb.height, bold=lb.bold, color=lb.color)
         poly = text_polygon(t)
+        if not poly.is_empty:                     # gedreht: Mitte der sichtbaren Schrift, nicht der Zeile
+            bx0, by0, bx1, by1 = poly.bounds
+            poly = affinity.translate(poly, t.x - (bx0 + bx1) / 2, t.y - (by0 + by1) / 2)
         clipped = poly.intersection(area)
         if clipped.is_empty:
             lay.warnings.append(f"{name} liegt außerhalb des Fachs und entfällt.")

@@ -45,7 +45,7 @@ function centroid(p: PolyOut): [number, number] {
 
 /** Draufsicht der Einlage im mm-Maßstab. Positionen in der Spec gelten vor der automatischen
  *  Zentrierung; das Layout liefert die Verschiebung (shift) mit. */
-export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onPocketClick }: {
+export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = [], tool, onBox, onCut, onPocketClick, onLabelMove }: {
   spec: InsertSpec; layout: LayoutOut | undefined; objects?: Record<string, ObjectSpec>
   sel: Sel; onSelect: (s: Sel, additive?: boolean) => void; selectedComps?: number[]
   tool?: Tool
@@ -56,6 +56,8 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
   /** Klick in eine Tasche: Platzierung und Layout-Position (mm) */
   onPocketClick?: (pi: number, x: number, y: number) => void
   onMove: (s: NonNullable<Sel>, x: number, y: number) => void
+  /** Fachbeschriftung gezogen: Verschiebung in mm */
+  onLabelMove?: (comp: number, ddx: number, ddy: number) => void
 }) {
   const tk = useTokens()
   const [stroke, setStrokeState] = useState<[number, number][] | null>(null)   // gezeichnete Linie (mm)
@@ -190,13 +192,26 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
               </Group>
             )
           })}
-          {/* Vordächer (grau) und Fachbeschriftungen aus dem Layout (absolute Lage, nicht greifbar: Auswahl über das Fach) */}
-          {layout && (layout.shelves?.length || layout.comp_labels?.length) ? (
+          {/* Vordächer (grau, nicht greifbar) und Fachbeschriftungen: anklicken wählt das Fach, ziehen verschiebt die Schrift */}
+          {layout?.shelves?.length ? (
             <Group x={px(0)} y={py(0)} listening={false}>
-              {(layout.shelves ?? []).map((sh, i) => <Polys key={'sh' + i} polys={sh.polygons} ox={0} oy={0} k={k} fill={alpha(tk['ink-2'], 0.45)} stroke={tk['ink-2']} width={0.8} />)}
-              {(layout.comp_labels ?? []).map((cl, i) => <Polys key={'cl' + i} polys={cl.polygons} ox={0} oy={0} k={k} fill={cl.color} stroke={tk.ink} width={0.5} />)}
+              {layout.shelves.map((sh, i) => <Polys key={'sh' + i} polys={sh.polygons} ox={0} oy={0} k={k} fill={alpha(tk['ink-2'], 0.45)} stroke={tk['ink-2']} width={0.8} />)}
             </Group>
           ) : null}
+          {(layout?.comp_labels ?? []).map((cl) => {
+            const act = sel?.kind === 'comp' && sel.index === cl.index
+            return (
+              <Group key={'cl' + cl.index} x={px(0)} y={py(0)} draggable
+                onMouseDown={(e) => { e.cancelBubble = true; onSelect({ kind: 'comp', index: cl.index }) }}
+                onDragEnd={(e) => {
+                  const ddx = (e.target.x() - px(0)) / k, ddy = -(e.target.y() - py(0)) / k
+                  e.target.position({ x: px(0), y: py(0) })
+                  onLabelMove?.(cl.index, Math.round(ddx * 10) / 10, Math.round(ddy * 10) / 10)
+                }}>
+                <Polys polys={cl.polygons} ox={0} oy={0} k={k} fill={cl.color} stroke={act ? tk.accent : tk.ink} width={act ? 1.5 : 0.5} />
+              </Group>
+            )
+          })}
           {/* Schriftzüge (Umriss aus dem Layout, Farbe = Druckfarbe; vertieft gestrichelt) */}
           {layout && (spec.texts ?? []).map((t, ti) => {
             const lt = layout.texts?.find((q) => q.index === ti)

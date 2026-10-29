@@ -578,6 +578,8 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
                 </div>
               )}
               <Editor2D spec={spec} layout={lay} objects={objMap} sel={sel} onSelect={select} onMove={move} selectedComps={compSel}
+                onLabelMove={(ci, ddx, ddy) => patch({ compartments: spec.compartments.map((c, i) => i === ci && c.label
+                  ? { ...c, label: { ...c.label, dx: Math.round((c.label.dx + ddx) * 10) / 10, dy: Math.round((c.label.dy + ddy) * 10) / 10 } } : c) })}
                 tool={tool} onBox={onBox} onCut={onCut}
                 onPocketClick={(pi, x, y) => {
                   // Klickpunkt -> Position entlang der Werkzeugachse (objekt-lokal x)
@@ -998,6 +1000,15 @@ function CompLabelEdit({ value, onChange }: { value: CompLabel | null; onChange:
         <NumberField label="Tiefe Vordach" value={lb.shelf_depth} step={1} min={5} max={40} onChange={(v) => upd({ shelf_depth: v })} />
       </>}
       {lb.text.trim() && <>
+        <label className="grid gap-1">
+          <span className="label mb-0">Winkel <span className="num">{Math.round(lb.rot_deg ?? 0)}°</span><span className="hint"> (gegen den Uhrzeigersinn)</span></span>
+          <input type="range" min={-180} max={180} step={1} value={lb.rot_deg ?? 0} onChange={(e) => upd({ rot_deg: +e.target.value })} />
+        </label>
+        <div className="flex gap-1 flex-wrap">
+          {[-90, 90].map((d) => <button key={d} className="btn btn-sm" onClick={() => upd({ rot_deg: ((((lb.rot_deg ?? 0) + d) % 360) + 540) % 360 - 180 })}>{d > 0 ? '+' : ''}{d}°</button>)}
+          <button className="btn btn-sm" onClick={() => upd({ rot_deg: 0 })} disabled={!lb.rot_deg}>Gerade</button>
+          <button className="btn btn-sm" onClick={() => upd({ dx: 0, dy: 0 })} disabled={!lb.dx && !lb.dy} title="Schrift wieder mittig ins Fach bzw. aufs Vordach setzen (auch gedreht)"><CrosshairSimple size={14} /> Mittig</button>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="Schriftgröße" value={lb.size ?? 0} step={0.5} min={0} max={40} onChange={(v) => upd({ size: v >= 2 ? v : null })}
             hint={lb.size == null ? 'passend' : 'Versalhöhe'} />
@@ -1009,7 +1020,7 @@ function CompLabelEdit({ value, onChange }: { value: CompLabel | null; onChange:
         <ColorPick label="Schriftfarbe" value={lb.color} onChange={(v) => upd({ color: v })} />
       </>}
       {value && <button className="btn btn-sm btn-quiet" onClick={() => onChange(null)}>Beschriftung entfernen</button>}
-      <div className="hint mt-0">Ohne Größe passt sich die Schrift dem Fach bzw. Vordach an; Versatz 0 = mittig.</div>
+      <div className="hint mt-0">Schrift im Layout anklicken wählt das Fach, ziehen verschiebt sie. Ohne Größe passt sie sich dem Fach bzw. Vordach an (auch gedreht).</div>
     </div>
   )
 }

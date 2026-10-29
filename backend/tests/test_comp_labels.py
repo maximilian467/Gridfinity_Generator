@@ -66,3 +66,22 @@ def test_bin_api_with_labels_and_shelf():
     lay = client.post(f"/api/inserts/{ins['id']}/layout", json=ins).json()
     assert len(lay["shelves"]) == 4, lay
     assert len(lay["comp_labels"]) == 3
+
+
+@pytest.mark.parametrize("rot", [90, 33])
+def test_label_rotation_stays_centered_and_fits(rot):
+    spec = _bin([CompLabel(text="2.5 mm", rot_deg=rot), CompLabel(text="2.5 mm")], gx=2, gy=2, cols=2, rows=1)
+    lay = compute_layout(spec, {})
+    t, c = lay.comp_labels[0], lay.comps[0]
+    assert t.spec.rot_deg == rot and c.poly.contains(t.poly)
+    assert t.poly.area == pytest.approx(text_area(t), rel=0.01)                 # nicht abgeschnitten
+    if rot == 90:                                                                # hochkant: höher als breit
+        x0, y0, x1, y1 = t.poly.bounds
+        assert y1 - y0 > x1 - x0
+    tc, cc = t.poly.envelope.centroid, c.poly.centroid
+    assert (tc.x, tc.y) == pytest.approx((cc.x, cc.y), abs=0.5)                 # weiter mittig
+
+
+def text_area(t):
+    from app.geometry.text import text_polygon
+    return text_polygon(t.spec).area

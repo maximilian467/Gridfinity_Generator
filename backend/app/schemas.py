@@ -81,6 +81,7 @@ class CompLabel(BaseModel):
     shelf: bool = False                              # Vordach mit der Beschriftung obendrauf
     shelf_depth: float = Field(12.0, ge=5, le=40)    # Tiefe des Vordachs (von der hinteren Wand)
     side: Literal["back", "front", "left", "right"] = "back"   # Wand des Vordachs (back = +y)
+    rot_deg: Angle = 0.0                             # Drehung (gegen den Uhrzeigersinn), Vordach links/rechts: zusätzlich zu ±90°
     dx: float = Field(0.0, ge=-300, le=300)          # Verschiebung gegenüber der Mitte
     dy: float = Field(0.0, ge=-300, le=300)
 
