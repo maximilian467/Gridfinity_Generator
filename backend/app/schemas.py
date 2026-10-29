@@ -70,6 +70,21 @@ class GripRecess(BaseModel):
     angle_deg: float = Field(0.0, ge=-80, le=80)     # gekoppelt: Schrägstellung gegenüber quer zur Werkzeugachse
 
 
+class CompLabel(BaseModel):
+    """Beschriftung eines Fachs: mittig auf dem Fachboden oder auf einem Vordach an der hinteren Wand
+    (Leiste oben im Fach, darunter 45° abgeschrägt, druckbar ohne Stützen)."""
+    text: str = Field("", max_length=40)             # leer: nichts gedruckt (Vordach bleibt, z. B. für Etiketten)
+    size: float | None = Field(None, ge=2, le=40)    # Versalhöhe; None = passend zum Fach bzw. Vordach
+    bold: bool = True
+    height: float = Field(0.6, ge=0.2, le=5)         # erhaben
+    color: Hex = "#f4f1ea"
+    shelf: bool = False                              # Vordach mit der Beschriftung obendrauf
+    shelf_depth: float = Field(12.0, ge=5, le=40)    # Tiefe des Vordachs (von der hinteren Wand)
+    side: Literal["back", "front", "left", "right"] = "back"   # Wand des Vordachs (back = +y)
+    dx: float = Field(0.0, ge=-300, le=300)          # Verschiebung gegenüber der Mitte
+    dy: float = Field(0.0, ge=-300, le=300)
+
+
 class Compartment(BaseModel):
     x: Coord
     y: Coord
@@ -79,6 +94,7 @@ class Compartment(BaseModel):
     depth: float | None = Field(15.0, ge=0.5, le=200)   # None = so tief wie möglich
     polygon: Annotated[list[Point2], Field(max_length=4000)] | None = None   # freie Form (automatische Kästen); sonst Rechteck x,y,w,l
     generated: bool = False                    # von 'Kästen erzeugen' angelegt (wird beim Neu-Erzeugen ersetzt)
+    label: CompLabel | None = None             # Beschriftung (mittig im Fach, optional auf einem Vordach)
 
 
 class TextLabel(BaseModel):
@@ -191,7 +207,8 @@ def color_palette(spec: InsertSpec) -> list[str]:
     """Druckfarben in Slot-Reihenfolge: Körper, Taschen, Mulden, Fächer, dann die Schriftfarben.
     Gleiche Farbe = gleicher Slot (Slot = Index + 1)."""
     out: list[str] = []
-    for h in [getattr(spec.color_hex, k) for k in ("body", "pocket", "grip", "compartment")] + [t.color for t in spec.texts]:
+    labels = [c.label.color for c in spec.compartments if c.label is not None and c.label.text.strip()]
+    for h in [getattr(spec.color_hex, k) for k in ("body", "pocket", "grip", "compartment")] + [t.color for t in spec.texts] + labels:
         if h.lower() not in out:
             out.append(h.lower())
     return out
@@ -234,6 +251,8 @@ class ProjectSpec(BaseModel):
     id: str = Field("", max_length=40)
     name: str = Field("Schublade", max_length=120)
     owner_id: int | None = None           # setzt nur der Server
+    kind: Literal["drawer", "cabinet"] = "drawer"   # Schrank: fasst Schubladen zusammen (setzt nur der Server)
+    cabinet_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")   # Schublade in diesem Schrank (setzt nur der Server)
     created_at: str = Field("", max_length=40)
     drawer: BaseplateSpec = Field(default_factory=lambda: BaseplateSpec(drawer_x=500, drawer_y=350))
     drawer_h: float | None = Field(None, ge=5, le=1000)      # Innenhöhe der Schublade (Warnung, wenn zu hoch)

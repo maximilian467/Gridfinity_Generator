@@ -35,7 +35,7 @@ export const api = {
     req<AdminUser>(`/admin/users/${id}`, json('PUT', body)),
   deleteUser: (id: number) => req<{ ok: boolean; removed: number }>(`/admin/users/${id}`, json('DELETE')),
   audit: () => req<AuditEntry[]>('/admin/audit?limit=60'),
-  userProjects: (id: number) => req<{ id: string; name: string; role: 'owner' | 'member'; archived: boolean }[]>(`/admin/users/${id}/projects`),
+  userProjects: (id: number) => req<{ id: string; name: string; role: 'owner' | 'member'; archived: boolean; kind: 'drawer' | 'cabinet'; cabinet: string | null }[]>(`/admin/users/${id}/projects`),
   objects: (all = false, shared = false) => req<ObjectSpec[]>('/objects' + listQuery(all, shared)),
   object: (id: string) => req<ObjectSpec>(`/objects/${id}`),
   createObject: (name: string) => req<ObjectSpec>('/objects', json('POST', { name })),
@@ -81,7 +81,7 @@ export const api = {
   compartmentGrid: (spec: InsertSpec, cols: number, rows: number) =>
     req<{ compartments: InsertSpec['compartments'] }>(`/inserts/${spec.id}/compartments/grid`, json('POST', { spec, cols, rows })),
   /** Fächer-Einlage ohne Werkzeug (Sortierkasten); height_mm null = Standardhöhe bzw. Projektvorlage */
-  createBin: (b: { name: string; grid_x: number; grid_y: number; cols: number; rows: number; height_mm: number | null; project_id?: string | null }) =>
+  createBin: (b: { name: string; grid_x: number; grid_y: number; cols: number; rows: number; height_mm: number | null; project_id?: string | null; labels?: string[]; shelf?: boolean }) =>
     req<InsertSpec>('/inserts/bin', json('POST', b)),
   /** Blindstopfen: verschließt freie Felder, Höhe frei (ab 5,5 mm), optional mit Beschriftung */
   createPlug: (b: { name: string; grid_x: number; grid_y: number; height_mm: number; stacking_lip: boolean; text: string; project_id?: string | null }) =>
@@ -89,7 +89,10 @@ export const api = {
 
   projects: (all = false, archived = false) => req<ProjectSpec[]>(`/projects?all=${all}&archived=${archived}`),
   project: (id: string) => req<ProjectSpec>(`/projects/${id}`),
-  createProject: (name: string, drawer_x: number, drawer_y: number) => req<ProjectSpec>('/projects', json('POST', { name, drawer_x, drawer_y })),
+  createProject: (name: string, drawer_x: number, drawer_y: number, cabinet_id: string | null = null) =>
+    req<ProjectSpec>('/projects', json('POST', { name, drawer_x, drawer_y, cabinet_id })),
+  createCabinet: (name: string) => req<ProjectSpec>('/projects', json('POST', { name, kind: 'cabinet' })),
+  setCabinet: (pid: string, cabinet_id: string | null) => req<ProjectSpec>(`/projects/${pid}/cabinet`, json('POST', { cabinet_id })),
   saveProject: (p: ProjectSpec) => req<ProjectSpec>(`/projects/${p.id}`, json('PUT', p)),
   archiveProject: (id: string) => req(`/projects/${id}`, json('DELETE')),
   restoreProject: (id: string) => req<ProjectSpec>(`/projects/${id}/restore`, json('POST')),

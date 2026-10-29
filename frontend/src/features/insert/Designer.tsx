@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, CheckCircle, CrosshairSimple, DownloadSimple, Plus, Rows, SquaresFour, TextT, Trash, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, CheckCircle, CrosshairSimple, DownloadSimple, Plus, Rows, Scan, SquaresFour, TextT, Trash, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
-import type { Compartment, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec, PartColors, TemplateField, TextLabel } from '../../lib/types'
-import { BLANK_OWN_FIELDS, FIELD_LABELS, PLUG_MIN_H, TEMPLATE_FIELDS } from '../../lib/types'
+import type { CompLabel, Compartment, ShelfSide, GripRecess, InsertSpec, LayoutOut, Level, ObjectSpec, PartColors, TemplateField, TextLabel } from '../../lib/types'
+import { BLANK_OWN_FIELDS, DEFAULT_COMP_LABEL, FIELD_LABELS, PLUG_MIN_H, TEMPLATE_FIELDS } from '../../lib/types'
 import { ColorPick, PartColorsEdit } from '../../components/ColorPick'
 import { ChunkGuard } from '../../components/ChunkGuard'
 import { BusyBar, Check, Field, Msg, Msgs, NumberField, Segmented, errText } from '../../components/ui'
@@ -203,6 +203,16 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
   const centerNow = () => setSpec((sp) => ({ ...sp, auto_center: true }))
 
   const usable = (objects.data ?? []).filter((o) => o.profile)
+  // weiteres Werkzeug einzeln scannen; nach dem Scan landet es in dieser Einlage (Lage und Drehung dann hier)
+  const scanNew = useMutation({
+    mutationFn: async () => {
+      clearTimeout(saveT.current); await api.saveInsert(spec)      // offene Änderungen zuerst sichern
+      const o = await api.createObject('Neues Werkzeug')
+      if (spec.project_id) await api.assign(spec.project_id, 'object', o.id)
+      return o
+    },
+    onSuccess: (o) => nav(`/scan/${o.id}?insert=${spec.id}`),
+  })
   const addObject = (oid: string) => objMap[oid] && patch({ placements: [...spec.placements, placeNew(spec, objMap, objMap[oid])] })
   const doArrange = () => patch({ placements: arrange(spec, objMap) })
   // Greifmulde: das Backend berechnet sie am Schwerpunkt (auto_grip), das Frontend übernimmt sie
@@ -526,6 +536,7 @@ function DesignerInner({ initial }: { initial: InsertSpec }) {
                 {usable.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
               </select>
             )}
+            <button className="btn btn-sm" onClick={() => scanNew.mutate()} disabled={scanNew.isPending} title="Weiteres Werkzeug einzeln scannen; es kommt danach in diese Einlage, Lage und Drehung stellst du hier ein"><Scan size={14} /> Werkzeug scannen</button>
             <button className="btn btn-sm" onClick={doArrange} disabled={!spec.placements.length} title="Objekte an die Innenecke rücken und untereinander anordnen"><Rows size={14} /> Anordnen</button>
             <span className="w-px h-6" style={{ background: 'var(--line)' }} />
             <button className="btn btn-sm" onClick={addGrip} disabled={!spec.placements.length || spec.auto_grip} title="Greifmulde automatisch am Schwerpunkt setzen"><Plus size={14} /> Greifmulde</button>
@@ -896,6 +907,7 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
         {[2, 3, 4].map((n) => <button key={n} className="btn btn-sm" onClick={() => onSplit(n)} disabled={compBusy}>{n} Fächer</button>)}
       </div>
       <div className="hint mt-0">Mit Shift-Klick weitere Kästen auswählen, um sie zu verbinden. Entf-Taste löscht.</div>
+      <CompLabelEdit value={c.label ?? null} onChange={(label) => upd({ label })} />
       {compErr && <Msg kind="err">{compErr}</Msg>}
       {del}
     </div>
@@ -912,6 +924,7 @@ function SelectionPanel({ spec, lay, sel, setSpec, onSel, objMap, compSel, onMer
         {c.depth !== null && <NumberField label="Tiefe" value={c.depth} step={1} min={2} onChange={(v) => upd({ depth: v })} />}
       </div>
       <Check label="So tief wie möglich" checked={c.depth === null} onChange={(v) => upd({ depth: v ? null : Math.round(maxDepth ?? 15) })} />
+      <CompLabelEdit value={c.label ?? null} onChange={(label) => upd({ label })} />
       {del}
     </div>
   )
@@ -965,6 +978,38 @@ function LevelTools({ obj, s, pieces }: { obj: ObjectSpec; s: number | null; pie
       <div className="hint mt-0">Liegt das Werkzeug hier tiefer (z. B. Griffschutz), erst eine eigene Ebene anlegen, dann tiefer setzen.
         Gilt für dieses Werkzeug in allen Einlagen.</div>
       {save.isError && <Msg kind="err">{errText(save.error)}</Msg>}
+    </div>
+  )
+}
+
+/** Beschriftung eines Fachs: mittig im Fach, optional auf einem Vordach an einer Wand (mit 45°-Abschrägung). */
+function CompLabelEdit({ value, onChange }: { value: CompLabel | null; onChange: (v: CompLabel | null) => void }) {
+  const lb = value ?? DEFAULT_COMP_LABEL
+  const upd = (q: Partial<CompLabel>) => onChange({ ...lb, ...q })
+  const sides: [ShelfSide, string][] = [['back', 'hinten'], ['front', 'vorn'], ['left', 'links'], ['right', 'rechts']]
+  return (
+    <div className="grid gap-2 mt-2">
+      <div className="text-sm font-medium">Beschriftung</div>
+      <input className="input" value={lb.text} maxLength={40} placeholder="z. B. M3 x 10" onChange={(e) => upd({ text: e.target.value })}
+        aria-label="Beschriftung des Fachs" />
+      <Check label="Vordach (Leiste oben im Fach, Beschriftung darauf)" checked={lb.shelf} onChange={(v) => upd({ shelf: v })} />
+      {lb.shelf && <>
+        <Segmented value={lb.side} onChange={(v) => upd({ side: v })} options={sides.map(([value, label]) => ({ value, label }))} />
+        <NumberField label="Tiefe Vordach" value={lb.shelf_depth} step={1} min={5} max={40} onChange={(v) => upd({ shelf_depth: v })} />
+      </>}
+      {lb.text.trim() && <>
+        <div className="grid grid-cols-2 gap-2">
+          <NumberField label="Schriftgröße" value={lb.size ?? 0} step={0.5} min={0} max={40} onChange={(v) => upd({ size: v >= 2 ? v : null })}
+            hint={lb.size == null ? 'passend' : 'Versalhöhe'} />
+          <NumberField label="Höhe" value={lb.height} step={0.2} min={0.2} max={5} onChange={(v) => upd({ height: v })} hint="erhaben" />
+          <NumberField label="Versatz X" value={lb.dx} step={0.5} onChange={(v) => upd({ dx: v })} />
+          <NumberField label="Versatz Y" value={lb.dy} step={0.5} onChange={(v) => upd({ dy: v })} />
+        </div>
+        <Check label="Fett" checked={lb.bold} onChange={(v) => upd({ bold: v })} />
+        <ColorPick label="Schriftfarbe" value={lb.color} onChange={(v) => upd({ color: v })} />
+      </>}
+      {value && <button className="btn btn-sm btn-quiet" onClick={() => onChange(null)}>Beschriftung entfernen</button>}
+      <div className="hint mt-0">Ohne Größe passt sich die Schrift dem Fach bzw. Vordach an; Versatz 0 = mittig.</div>
     </div>
   )
 }

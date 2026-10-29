@@ -186,10 +186,17 @@ export function Editor2D({ spec, layout, sel, onSelect, onMove, selectedComps = 
                 onDragEnd={dragEnd({ kind: 'comp', index: ci })}>
                 <Polys polys={polys} ox={ox} oy={oy} k={k} fill={alpha(tk.green, 0.3)}
                   stroke={act ? tk.accent : tk.green} width={act ? 2.5 : 1.25} />
-                {polys[0] && label(...centroid(polys[0]), c.depth === null ? 'max' : lc ? lc.depth.toFixed(0) : c.depth.toFixed(0), ox, oy)}
+                {polys[0] && !c.label?.text.trim() && label(...centroid(polys[0]), c.depth === null ? 'max' : lc ? lc.depth.toFixed(0) : c.depth.toFixed(0), ox, oy)}
               </Group>
             )
           })}
+          {/* Vordächer (grau) und Fachbeschriftungen aus dem Layout (absolute Lage, nicht greifbar: Auswahl über das Fach) */}
+          {layout && (layout.shelves?.length || layout.comp_labels?.length) ? (
+            <Group x={px(0)} y={py(0)} listening={false}>
+              {(layout.shelves ?? []).map((sh, i) => <Polys key={'sh' + i} polys={sh.polygons} ox={0} oy={0} k={k} fill={alpha(tk['ink-2'], 0.45)} stroke={tk['ink-2']} width={0.8} />)}
+              {(layout.comp_labels ?? []).map((cl, i) => <Polys key={'cl' + i} polys={cl.polygons} ox={0} oy={0} k={k} fill={cl.color} stroke={tk.ink} width={0.5} />)}
+            </Group>
+          ) : null}
           {/* Schriftzüge (Umriss aus dem Layout, Farbe = Druckfarbe; vertieft gestrichelt) */}
           {layout && (spec.texts ?? []).map((t, ti) => {
             const lt = layout.texts?.find((q) => q.index === ti)

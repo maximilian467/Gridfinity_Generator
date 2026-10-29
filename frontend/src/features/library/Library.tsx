@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Archive, Copy, Cube, FolderSimple, Plus, Rectangle, Scan, SquaresFour, Trash, UsersThree } from '@phosphor-icons/react'
+import { Archive, Copy, Dresser, Cube, FolderSimple, Plus, Rectangle, Scan, SquaresFour, Trash, UsersThree } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import { Check, Empty, Msg, NumberField, Segmented, Silhouette, errText } from '../../components/ui'
 import type { InsertSpec, ProjectSpec } from '../../lib/types'
@@ -19,30 +19,61 @@ function Projects({ showAll }: { showAll: boolean }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ['projects'] })
   const archiveP = useMutation({ mutationFn: api.archiveProject, onSuccess: refresh })
   const restoreP = useMutation({ mutationFn: api.restoreProject, onSuccess: refresh })
-  const [form, setForm] = useState<{ name: string; x: number; y: number } | null>(null)
+  const [form, setForm] = useState<{ kind: 'drawer' | 'cabinet'; name: string; x: number; y: number; cabinet: string } | null>(null)
   const create = useMutation({
-    mutationFn: () => api.createProject(form!.name, form!.x, form!.y),
+    mutationFn: () => form!.kind === 'cabinet' ? api.createCabinet(form!.name) : api.createProject(form!.name, form!.x, form!.y, form!.cabinet || null),
     onSuccess: (p) => { qc.invalidateQueries({ queryKey: ['projects'] }); nav(`/project/${p.id}`) },
   })
   const count = (p: ProjectSpec) => ({
     ins: (inserts.data ?? []).filter((i) => i.project_id === p.id).length,
     obj: (objects.data ?? []).filter((o) => o.project_id === p.id).length,
   })
+  const list = projects.data ?? []
+  const cabinets = list.filter((p) => p.kind === 'cabinet')
+  const drawersOf = (cid: string) => list.filter((p) => p.kind !== 'cabinet' && p.cabinet_id === cid)
+  const loose = list.filter((p) => p.kind !== 'cabinet' && !cabinets.some((c) => c.id === p.cabinet_id))
+  const actions = (p: ProjectSpec) => p.access?.role === 'member' ? null : archive
+    ? <button className="btn btn-sm" onClick={() => restoreP.mutate(p.id)} disabled={restoreP.isPending}>Wiederherstellen</button>
+    : <button className="btn btn-sm btn-quiet" aria-label={`${p.name} löschen`} title="Löschen (wird archiviert, wiederherstellbar)"
+      onClick={() => confirm(`${p.kind === 'cabinet' ? 'Schrank' : 'Projekt'} "${p.name}" löschen? Es wird archiviert und lässt sich wiederherstellen.`) && archiveP.mutate(p.id)}><Trash size={14} /></button>
+  const drawerCard = (p: ProjectSpec) => {
+    const c = count(p)
+    return (
+      <div key={p.id} className="panel p-4 flex gap-2 items-start">
+        <button className="grid gap-1 text-left cursor-pointer flex-1 min-w-0 bg-transparent border-0 p-0" style={{ color: 'var(--ink)', font: 'inherit' }} onClick={() => nav(`/project/${p.id}`)}>
+          <span className="inline-flex items-center gap-2 font-semibold"><FolderSimple size={18} color="var(--accent)" /> <span className="truncate">{p.name}</span></span>
+          <span className="num text-sm" style={{ color: 'var(--ink-2)' }}>{p.drawer.drawer_x} x {p.drawer.drawer_y} mm · {c.obj} Werkzeuge · {c.ins} Einlagen</span>
+          <span className="num text-xs" style={{ color: 'var(--ink-3)' }}>{archive && p.archived_at ? `archiviert am ${new Date(p.archived_at).toLocaleDateString('de-DE')}` : p.template.height_mm ? `alle ${p.template.height_mm} mm hoch` : 'Höhe automatisch'}</span>
+          <SharedChip p={p} />
+        </button>
+        {actions(p)}
+      </div>
+    )
+  }
   return (
     <section className="grid gap-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="text-xl font-semibold tracking-tight">{archive ? 'Archivierte Projekte' : 'Projekte'}</h1>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button className={`btn ${archive ? 'btn-on' : ''}`} onClick={() => setArchive((v) => !v)}><Archive size={16} /> {archive ? 'Zurück zu den Projekten' : 'Archiv'}</button>
-          {!archive && <button className="btn btn-primary" onClick={() => setForm({ name: 'Schublade', x: 500, y: 350 })}><Plus size={16} /> Neues Projekt</button>}
+          {!archive && <button className="btn" onClick={() => setForm({ kind: 'cabinet', name: 'Schrank', x: 500, y: 350, cabinet: '' })}><Dresser size={16} /> Neuer Schrank</button>}
+          {!archive && <button className="btn btn-primary" onClick={() => setForm({ kind: 'drawer', name: 'Schublade', x: 500, y: 350, cabinet: '' })}><Plus size={16} /> Neue Schublade</button>}
         </div>
       </div>
       {form && (
-        <div className="panel p-3 grid gap-2 md:grid-cols-[1fr_140px_140px_auto] items-end">
-          <label className="grid gap-1"><span className="label mb-0">Name</span>
-            <input className="input" autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="z. B. Schreibtisch, Schublade oben" /></label>
-          <NumberField label="Schublade Breite" value={form.x} step={1} min={50} onChange={(v) => setForm({ ...form, x: v })} />
-          <NumberField label="Schublade Tiefe" value={form.y} step={1} min={50} onChange={(v) => setForm({ ...form, y: v })} />
+        <div className={`panel p-3 grid gap-2 items-end ${form.kind === 'cabinet' ? 'md:grid-cols-[1fr_auto]' : 'md:grid-cols-[1fr_180px_140px_140px_auto]'}`}>
+          <label className="grid gap-1"><span className="label mb-0">{form.kind === 'cabinet' ? 'Name des Schranks' : 'Name der Schublade'}</span>
+            <input className="input" autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder={form.kind === 'cabinet' ? 'z. B. Werkstattschrank, Rollwagen' : 'z. B. Schreibtisch, Schublade oben'} /></label>
+          {form.kind === 'drawer' && <>
+            <label className="grid gap-1"><span className="label mb-0">Schrank</span>
+              <select className="input" value={form.cabinet} onChange={(e) => setForm({ ...form, cabinet: e.target.value })}>
+                <option value="">ohne Schrank</option>
+                {cabinets.filter((c) => c.access?.role !== 'admin' || c.id === form.cabinet).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select></label>
+            <NumberField label="Schublade Breite" value={form.x} step={1} min={50} onChange={(v) => setForm({ ...form, x: v })} />
+            <NumberField label="Schublade Tiefe" value={form.y} step={1} min={50} onChange={(v) => setForm({ ...form, y: v })} />
+          </>}
           <div className="flex gap-2">
             <button className="btn btn-primary" onClick={() => create.mutate()} disabled={create.isPending || !form.name.trim()}>Anlegen</button>
             <button className="btn" onClick={() => setForm(null)}>Abbrechen</button>
@@ -50,28 +81,32 @@ function Projects({ showAll }: { showAll: boolean }) {
           {create.isError && <Msg kind="err">{errText(create.error)}</Msg>}
         </div>
       )}
-      {projects.isPending ? <div className="skeleton h-28" /> : !projects.data?.length ? (
+      {projects.isPending ? <div className="skeleton h-28" /> : !list.length ? (
         archive ? <Empty title="Archiv ist leer">Gelöschte Projekte landen hier und lassen sich wiederherstellen.</Empty> :
-        <Empty title="Noch keine Projekte">Ein Projekt ist eine Schublade: Baseplate nach Maß, alle Werkzeuge mit ihren Einlagen und ein digitaler Klon in 3D.</Empty>
+        <Empty title="Noch keine Projekte">Eine Schublade ist ein Projekt: Baseplate nach Maß, alle Werkzeuge mit ihren Einlagen und ein digitaler Klon in 3D. Ein Schrank fasst mehrere Schubladen zusammen und lässt sich als Ganzes mit anderen teilen.</Empty>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {projects.data.map((p) => {
-            const c = count(p)
+        <div className="grid gap-4">
+          {cabinets.map((cab) => {
+            const ds = drawersOf(cab.id)
             return (
-              <div key={p.id} className="panel p-4 flex gap-2 items-start">
-                <button className="grid gap-1 text-left cursor-pointer flex-1 min-w-0 bg-transparent border-0 p-0" style={{ color: 'var(--ink)', font: 'inherit' }} onClick={() => nav(`/project/${p.id}`)}>
-                  <span className="inline-flex items-center gap-2 font-semibold"><FolderSimple size={18} color="var(--accent)" /> <span className="truncate">{p.name}</span></span>
-                  <span className="num text-sm" style={{ color: 'var(--ink-2)' }}>{p.drawer.drawer_x} x {p.drawer.drawer_y} mm · {c.obj} Werkzeuge · {c.ins} Einlagen</span>
-                  <span className="num text-xs" style={{ color: 'var(--ink-3)' }}>{archive && p.archived_at ? `archiviert am ${new Date(p.archived_at).toLocaleDateString('de-DE')}` : p.template.height_mm ? `alle ${p.template.height_mm} mm hoch` : 'Höhe automatisch'}</span>
-                  <SharedChip p={p} />
-                </button>
-                {p.access?.role === 'member' ? null : archive
-                  ? <button className="btn btn-sm" onClick={() => restoreP.mutate(p.id)} disabled={restoreP.isPending}>Wiederherstellen</button>
-                  : <button className="btn btn-sm btn-quiet" aria-label={`${p.name} löschen`} title="Löschen (wird archiviert, wiederherstellbar)"
-                    onClick={() => confirm(`Projekt "${p.name}" löschen? Es wird archiviert und lässt sich wiederherstellen.`) && archiveP.mutate(p.id)}><Trash size={14} /></button>}
+              <div key={cab.id} className="panel p-3 grid gap-3">
+                <div className="flex items-start gap-2">
+                  <button className="grid gap-1 text-left cursor-pointer flex-1 min-w-0 bg-transparent border-0 p-0" style={{ color: 'var(--ink)', font: 'inherit' }} onClick={() => nav(`/project/${cab.id}`)}>
+                    <span className="inline-flex items-center gap-2 font-semibold text-lg"><Dresser size={20} color="var(--accent)" /> <span className="truncate">{cab.name}</span></span>
+                    <span className="text-sm" style={{ color: 'var(--ink-2)' }}>Schrank · {ds.length} {ds.length === 1 ? 'Schublade' : 'Schubladen'}</span>
+                    <SharedChip p={cab} />
+                  </button>
+                  {!archive && cab.access?.role !== 'admin' && <button className="btn btn-sm" onClick={() => setForm({ kind: 'drawer', name: `Schublade ${ds.length + 1}`, x: 500, y: 350, cabinet: cab.id })}><Plus size={14} /> Schublade</button>}
+                  {actions(cab)}
+                </div>
+                {ds.length > 0 && <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">{ds.map(drawerCard)}</div>}
               </div>
             )
           })}
+          {loose.length > 0 && <>
+            {cabinets.length > 0 && <h2 className="font-semibold" style={{ color: 'var(--ink-2)' }}>Schubladen ohne Schrank</h2>}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">{loose.map(drawerCard)}</div>
+          </>}
         </div>
       )}
     </section>
@@ -138,7 +173,7 @@ export function Library() {
           <select className="input" style={{ width: 220 }} value={pf} onChange={(e) => setPf(e.target.value)} aria-label="Nach Projekt filtern">
             <option value="">Alle Projekte</option>
             <option value="-">Ohne Projekt</option>
-            {projects.data.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {projects.data.filter((p) => p.kind !== 'cabinet').map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}
         <div className="flex-1" />

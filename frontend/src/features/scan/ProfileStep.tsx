@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { ArrowsClockwise, ArrowsHorizontal, ArrowsVertical, Stack, Trash } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import { placeNew } from '../../lib/placement'
@@ -28,6 +28,7 @@ export function ProfileStep({ o: obj, header, bar, topOnly = false, onUseSide }:
 }) {
   const qc = useQueryClient()
   const nav = useNavigate()
+  const intoInsert = useSearchParams()[0].get('insert')     // aus einer Einlage heraus gescannt: dorthin zurück
   const [flipLr, setFlipLr] = useState<'auto' | 'no' | 'yes'>(obj.side_flip_lr === null ? 'auto' : obj.side_flip_lr ? 'yes' : 'no')
   const [flipUd, setFlipUd] = useState(obj.side_flip_ud)
   const [len, setLen] = useState(obj.calipers.length ?? 0)
@@ -110,6 +111,15 @@ export function ProfileStep({ o: obj, header, bar, topOnly = false, onUseSide }:
   const o = calc.data ?? shown ?? obj
   const newInsert = useMutation({
     mutationFn: async () => {
+      if (intoInsert) {                   // in die Einlage legen, aus der gescannt wurde (Lage danach im Designer)
+        const ins = await api.insert(intoInsert)
+        const objs = Object.fromEntries(await Promise.all(ins.placements.map(async (pl) => [pl.object_id, await api.object(pl.object_id).catch(() => null)])))
+        if (!ins.placements.some((pl) => pl.object_id === o.id))
+          await api.saveInsert({ ...ins, placements: [...ins.placements, placeNew(ins, Object.fromEntries(Object.entries(objs).filter(([, v]) => v)) as Record<string, import('../../lib/types').ObjectSpec>, o)] })
+        qc.removeQueries({ queryKey: ['insert', ins.id] })      // Designer lädt die Einlage neu
+        qc.invalidateQueries({ queryKey: ['objects'] })
+        return { project: null, id: ins.id }
+      }
       if (o.project_id) {                 // im Projekt: Einlage nach Vorlage, gleich in die Schublade
         await api.generate(o.project_id, [o.id], true)
         return { project: o.project_id, id: '' }
@@ -241,7 +251,7 @@ export function ProfileStep({ o: obj, header, bar, topOnly = false, onUseSide }:
       {bar({
         status: calc.isPending || setLv.isPending ? 'Speichere Profil …' : edited ? 'Profil geändert …' : ready ? 'Objekt ist gespeichert.' : '',
         secondary: <button className="btn" onClick={() => nav('/')}>Zur Bibliothek</button>,
-        primary: { label: o.project_id ? 'Einlage nach Projektvorlage' : 'Einlage anlegen', onClick: () => newInsert.mutate(), disabled: !ready || calc.isPending, busy: newInsert.isPending },
+        primary: { label: intoInsert ? 'In die Einlage legen' : o.project_id ? 'Einlage nach Projektvorlage' : 'Einlage anlegen', onClick: () => newInsert.mutate(), disabled: !ready || calc.isPending, busy: newInsert.isPending },
       })}
     </>
   )

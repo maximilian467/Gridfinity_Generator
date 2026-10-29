@@ -181,7 +181,7 @@ function UserProjects({ u, onChange }: { u: AdminUser; onChange: () => void }) {
           <ul className="grid gap-1 m-0 p-0 list-none">
             {mine.data.map((p) => (
               <li key={p.id} className="flex items-center gap-2 flex-wrap">
-                <Link className="font-medium truncate flex-1 min-w-0" to={`/project/${p.id}`} style={{ color: 'var(--ink)' }}>{p.name}</Link>
+                <Link className="font-medium truncate flex-1 min-w-0" to={`/project/${p.id}`} style={{ color: 'var(--ink)' }}>{p.kind === 'cabinet' ? 'Schrank: ' : ''}{p.name}{p.cabinet ? <span className="hint"> · im Schrank {p.cabinet}</span> : null}</Link>
                 {p.archived && <span className="chip text-xs">archiviert</span>}
                 {p.role === 'owner'
                   ? <span className="chip text-xs"><Crown size={12} /> Besitzer</span>
@@ -199,8 +199,9 @@ function UserProjects({ u, onChange }: { u: AdminUser; onChange: () => void }) {
       {free.length > 0 && (
         <select className="input" style={{ maxWidth: 340 }} value="" disabled={busy} aria-label="Zu Projekt hinzufügen"
           onChange={(e) => e.target.value && add.mutate(e.target.value)}>
-          <option value="">+ Zu Projekt hinzufügen …</option>
-          {free.map((p) => <option key={p.id} value={p.id}>{p.name}{p.access?.owner ? ` (von ${p.access.owner})` : ''}</option>)}
+          <option value="">+ Zu Schrank oder Schublade hinzufügen …</option>
+          {free.filter((p) => p.kind === 'cabinet').map((p) => <option key={p.id} value={p.id}>Schrank: {p.name}{p.access?.owner ? ` (von ${p.access.owner})` : ''}</option>)}
+          {free.filter((p) => p.kind !== 'cabinet').map((p) => <option key={p.id} value={p.id}>{p.name}{p.access?.owner ? ` (von ${p.access.owner})` : ''}</option>)}
         </select>
       )}
       {add.isError && <Msg kind="err">{errText(add.error)}</Msg>}

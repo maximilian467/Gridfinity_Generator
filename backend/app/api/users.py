@@ -106,11 +106,13 @@ def user_projects(uid: int, _: Principal = Depends(require_admin)) -> list[dict]
     """Projekte, an denen der Nutzer beteiligt ist (Besitzer oder Mitglied). Hinzufügen und Entfernen
     laufen über /projects/{pid}/members (Admins dürfen dort bei jedem Projekt)."""
     mine = storage.member_projects(uid)
+    names = {p.id: p.name for p in storage._read_projects()}
     out = []
     for p in storage._read_projects():
         if p.owner_id == uid or p.id in mine:
             out.append({"id": p.id, "name": p.name, "role": "owner" if p.owner_id == uid else "member",
-                        "archived": p.archived})
+                        "archived": p.archived, "kind": p.kind,
+                        "cabinet": names.get(p.cabinet_id or "") if p.kind == "drawer" else None})
     return sorted(out, key=lambda p: (p["archived"], p["role"] != "owner", p["name"].lower()))
 
 

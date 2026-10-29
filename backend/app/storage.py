@@ -5,7 +5,7 @@ den angemeldeten Nutzer und werfen KeyError (-> 404), wenn er keinen Zugriff hat
 Antwort nicht einmal, dass es die ID gibt. Admins sehen alles, Altdaten ohne Besitzer nur Admins.
 
 Gemeinsame Projekte: Wer an einem Projekt beteiligt ist (Besitzer oder Mitglied, Tabelle
-project_members), sieht und bearbeitet alles, was im Projekt liegt (project_id), dazu die Werkzeuge
+project_members, bei einer Schublade auch alle Beteiligten ihres Schranks), sieht und bearbeitet alles, was im Projekt liegt (project_id), dazu die Werkzeuge
 in den Einlagen des Projekts, sofern deren Besitzer selbst beteiligt ist. Anderes (eigene
 Bibliothek, andere Projekte) bleibt privat. Löschen, Mitglieder verwalten und Archivieren darf nur,
 wem der Eintrag bzw. das Projekt gehört.
@@ -176,15 +176,39 @@ def load_project(pid: str, user: Principal | None) -> ProjectSpec:
     if not f.exists():
         raise KeyError(pid)
     spec = ProjectSpec.model_validate_json(f.read_text(encoding="utf-8"))
-    if user is not None and not (can_access(spec.owner_id, user) or user.id in member_ids(pid)):
+    if user is not None and not (user.is_admin or user.id in participants(spec)):
         raise KeyError(pid)
     return spec
 
 
+def cabinet_of(p: ProjectSpec) -> ProjectSpec | None:
+    """Schrank einer Schublade (fehlt er oder ist es keiner: None)."""
+    if not p.cabinet_id or p.kind != "drawer":
+        return None
+    try:
+        c = load_project(p.cabinet_id, None)
+    except KeyError:
+        return None
+    return c if c.kind == "cabinet" else None
+
+
+def participants(p: ProjectSpec) -> set[int]:
+    """Beteiligte: Besitzer und Mitglieder, bei einer Schublade zusätzlich die ihres Schranks."""
+    out = set(member_ids(p.id)) | ({p.owner_id} if p.owner_id is not None else set())
+    c = cabinet_of(p)
+    return out | participants(c) if c is not None else out
+
+
+def project_owners(p: ProjectSpec) -> set[int]:
+    """Wer das Projekt verwaltet: sein Besitzer und (bei einer Schublade) der Besitzer des Schranks."""
+    c = cabinet_of(p)
+    return {o for o in (p.owner_id, c.owner_id if c else None) if o is not None}
+
+
 def list_projects(user: Principal, all_: bool = False) -> list[ProjectSpec]:
-    """Eigene Projekte und die, in denen der Nutzer Mitglied ist."""
-    shared = member_projects(user.id)
-    out = [p for p in _read_projects() if _visible(p.owner_id, user, all_) or p.id in shared]
+    """Eigene Projekte und die, an denen der Nutzer beteiligt ist (auch über einen Schrank)."""
+    part = participation()
+    out = [p for p in _read_projects() if _visible(p.owner_id, user, all_) or user.id in part.get(p.id, set())]
     return sorted(out, key=lambda p: p.created_at, reverse=True)
 
 
@@ -217,9 +241,14 @@ def participation() -> dict[str, set[int]]:
     out: dict[str, set[int]] = {}
     for p in _read_projects():
         out[p.id] = {p.owner_id} if p.owner_id is not None else set()
+    projects = {p.id: p for p in _read_projects()}
     for pid, uid in rows:
         if pid in out:
             out[pid].add(uid)
+    for p in projects.values():               # Schublade: auch die Beteiligten des Schranks
+        c = projects.get(p.cabinet_id or "")
+        if p.kind == "drawer" and c is not None and c.kind == "cabinet":
+            out[p.id] |= out[c.id]
     return out
 
 
@@ -231,7 +260,7 @@ def in_project(pid: str | None, user: Principal) -> bool:
         p = load_project(pid, None)
     except KeyError:
         return False
-    return p.owner_id == user.id or user.id in member_ids(pid)
+    return user.id in participants(p)
 
 
 def add_member(pid: str, uid: int, by: int) -> None:
@@ -297,7 +326,7 @@ def can_delete(owner_id: int | None, project_id: str | None, user: Principal) ->
         return True
     if project_id:
         try:
-            return load_project(project_id, None).owner_id == user.id
+            return user.id in project_owners(load_project(project_id, None))
         except KeyError:
             return False
     return False

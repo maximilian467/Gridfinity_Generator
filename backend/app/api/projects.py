@@ -8,6 +8,10 @@ Gemeinsam bearbeiten: Der Besitzer fügt weitere Nutzer per E-Mail als Mitgliede
 bearbeiten das Projekt wie der Besitzer (Schublade, Vorlage, Werkzeuge, Einlagen, Scans), dürfen aber
 keine Mitglieder verwalten, das Projekt nicht archivieren und nur selbst Angelegtes löschen. Sie
 können das Projekt verlassen; was sie darin angelegt haben, geht dann an den Besitzer über.
+
+Schränke: Ein Projekt der Art "cabinet" fasst Schubladen (Projekte mit cabinet_id) zusammen. Wer am
+Schrank beteiligt ist, ist an allen seinen Schubladen beteiligt; der Besitzer des Schranks verwaltet
+sie wie seine eigenen (Mitglieder, Archiv). Schubladen behalten zusätzlich eigene Mitglieder.
 """
 from __future__ import annotations
 
@@ -41,7 +45,7 @@ def _get(pid: str, user: Principal) -> ProjectSpec:
 
 
 def _owner_only(p: ProjectSpec, user: Principal, what: str) -> None:
-    if not (user.is_admin or p.owner_id == user.id):
+    if not (user.is_admin or user.id in storage.project_owners(p)):
         raise HTTPException(403, f"{what} darf nur, wem das Projekt gehört.")
 
 
@@ -60,10 +64,10 @@ def _out(ps: list[ProjectSpec], user: Principal) -> list[ProjectOut]:
         counts = dict(s.execute(select(ProjectMember.project_id, func.count())
                                 .group_by(ProjectMember.project_id)).all())
         names = {i: n or e for i, n, e in s.execute(select(User.id, User.name, User.email)).all()}
-    mine = storage.member_projects(user.id)
+    part = storage.participation()
     out = []
     for p in ps:
-        role = "owner" if p.owner_id == user.id else "member" if p.id in mine else "admin"
+        role = "owner" if p.owner_id == user.id else "member" if user.id in part.get(p.id, set()) else "admin"
         out.append(ProjectOut(**p.model_dump(), access=ProjectAccess(
             role=role, owner=names.get(p.owner_id, "") if p.owner_id is not None else "", members=counts.get(p.id, 0))))
     return out
@@ -104,11 +108,30 @@ class NewProject(BaseModel):
     name: str = Field("Schublade", max_length=120)
     drawer_x: float = Field(500, ge=20, le=2000)
     drawer_y: float = Field(350, ge=20, le=2000)
+    kind: Literal["drawer", "cabinet"] = "drawer"
+    cabinet_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")   # neue Schublade gleich in diesen Schrank
+
+
+def _cabinet(cid: str, user: Principal) -> ProjectSpec:
+    """Schrank, an dem der Nutzer beteiligt ist (sonst 404)."""
+    c = _get(cid, user)
+    if c.kind != "cabinet":
+        raise HTTPException(422, "Das ist kein Schrank.")
+    if c.archived:
+        raise HTTPException(409, "Der Schrank ist archiviert.")
+    return c
 
 
 @router.post("", response_model=ProjectOut)
 def create(body: NewProject, user: Principal = Depends(current_user)) -> ProjectOut:
-    p = ProjectSpec(name=body.name.strip() or "Schublade")
+    """Schublade (optional gleich in einem Schrank, an dem man beteiligt ist) oder Schrank anlegen."""
+    if body.kind == "cabinet":
+        if body.cabinet_id:
+            raise HTTPException(422, "Ein Schrank liegt in keinem Schrank.")
+        return _one(storage.create_project(ProjectSpec(name=body.name.strip() or "Schrank", kind="cabinet"), user), user)
+    if body.cabinet_id:
+        _cabinet(body.cabinet_id, user)
+    p = ProjectSpec(name=body.name.strip() or "Schublade", cabinet_id=body.cabinet_id)
     p.drawer.drawer_x, p.drawer.drawer_y = body.drawer_x, body.drawer_y
     std = standard_height(user)
     if std:                                   # alle Einlagen gleich hoch: Standardhöhe als Vorlage
@@ -126,7 +149,8 @@ def put(pid: str, spec: ProjectSpec, user: Principal = Depends(current_user)) ->
     """Speichern (Besitzer und Mitglieder). Besitzer und Archiv-Stand ändern sich hier nie."""
     old = _get(pid, user)
     spec = spec.model_copy(update={"id": pid, "owner_id": old.owner_id, "created_at": old.created_at,
-                                   "archived": old.archived, "archived_at": old.archived_at})
+                                   "archived": old.archived, "archived_at": old.archived_at,
+                                   "kind": old.kind, "cabinet_id": old.cabinet_id})
     storage.save_project(spec)
     if spec.template != old.template:          # Vorlage geändert: an alle Einlagen weitergeben
         for ins in project_inserts(spec):
@@ -154,6 +178,28 @@ def restore(pid: str, user: Principal = Depends(current_user)) -> ProjectOut:
     _owner_only(p, user, "Wiederherstellen")
     p.archived, p.archived_at = False, ""
     storage.save_project(p)
+    return _one(p, user)
+
+
+class CabinetBody(BaseModel):
+    cabinet_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")    # None = aus dem Schrank nehmen
+
+
+@router.post("/{pid}/cabinet", response_model=ProjectOut)
+def set_cabinet(pid: str, body: CabinetBody, request: Request, user: Principal = Depends(current_user)) -> ProjectOut:
+    """Schublade in einen Schrank stellen oder herausnehmen. Nur wer die Schublade verwaltet; der
+    Ziel-Schrank muss einem selbst gehören (sonst bekämen dessen Beteiligte ungefragt Zugriff)."""
+    p = _get(pid, user)
+    if p.kind != "drawer":
+        raise HTTPException(422, "Nur Schubladen lassen sich einem Schrank zuordnen.")
+    _owner_only(p, user, "Einem Schrank zuordnen")
+    if body.cabinet_id:
+        c = _cabinet(body.cabinet_id, user)
+        if not (user.is_admin or c.owner_id == user.id):
+            raise HTTPException(403, "Schubladen lassen sich nur in eigene Schränke stellen.")
+    p.cabinet_id = body.cabinet_id
+    storage.save_project(p)
+    auth.audit("project_cabinet", f"{p.name} ({pid}) -> {body.cabinet_id or '-'}", user.id, auth.client_ip(request))
     return _one(p, user)
 
 
@@ -239,6 +285,8 @@ def assign(pid: str, body: AssignBody, user: Principal = Depends(current_user)) 
     """Einlage oder Werkzeug dem Projekt zuordnen (oder herausnehmen). Hineinlegen darf man nur Eigenes
     (bzw. was schon im Projekt liegt), herausnehmen nur, was im Projekt liegt."""
     p = _get(pid, user)
+    if p.kind == "cabinet":
+        raise HTTPException(422, "Einlagen und Werkzeuge gehören in eine Schublade, nicht direkt in den Schrank.")
     try:
         item = storage.load_insert(body.id, user) if body.kind == "insert" else storage.load_object(body.id, user)
         if body.member and item.project_id != pid and not storage.may_move(item.owner_id, user):

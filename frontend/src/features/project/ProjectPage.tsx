@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router'
-import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Images, MagicWand, Plus, Rectangle, Rows, Scan, SignOut, SquaresFour, Trash, UsersThree, XCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowsClockwise, CheckCircle, Cube, Dresser, Images, MagicWand, Plus, Rectangle, Rows, Scan, SignOut, SquaresFour, Trash, UsersThree, XCircle } from '@phosphor-icons/react'
 import { api } from '../../lib/api'
 import type { BaseplateSpec, CloneData, CloneInsert, InsertTemplate, ProjectSpec, TemplateField } from '../../lib/types'
 import { FIELD_LABELS } from '../../lib/types'
@@ -14,6 +14,7 @@ import { BatchScan } from './BatchScan'
 import { NewBinForm } from '../insert/NewBinForm'
 import { NewPlugForm } from '../insert/NewPlugForm'
 import { Members } from './Members'
+import { CabinetPage } from './CabinetPage'
 
 const Clone3D = lazy(() => import('./Clone3D').then((m) => ({ default: m.Clone3D })))
 
@@ -24,6 +25,7 @@ export function ProjectPage() {
   const loaded = useQuery({ queryKey: ['project', id], queryFn: () => api.project(id), staleTime: Infinity })
   if (loaded.isPending) return <div className="p-6"><div className="skeleton h-96 max-w-[1400px] mx-auto" /></div>
   if (loaded.isError) return <div className="p-6"><Msg kind="err">Projekt nicht gefunden.</Msg></div>
+  if (loaded.data.kind === 'cabinet') return <CabinetPage key={id} initial={loaded.data} />
   return <ProjectInner key={id} initial={loaded.data} />
 }
 
@@ -63,6 +65,7 @@ function ProjectInner({ initial }: { initial: ProjectSpec }) {
       <header className="flex flex-wrap items-center gap-3">
         <input className="input text-xl font-semibold tracking-tight" style={{ width: 'min(420px, 100%)' }} value={p.name}
           onChange={(e) => patch({ name: e.target.value })} aria-label="Projektname" />
+        <CabinetChip p={p} onMoved={(c) => patch({ cabinet_id: c })} />
         <span className="chip num">{p.drawer.drawer_x} x {p.drawer.drawer_y} mm</span>
         {data && <span className="chip num">{placed} / {data.inserts.length} Einlagen in der Schublade</span>}
         {data && data.inserts.some((i) => i.placed) && (
@@ -567,4 +570,31 @@ function PlateTab({ p, patch }: { p: ProjectSpec; patch: (q: Partial<ProjectSpec
       </section>
     </div>
   )
+}
+
+/** Schrank der Schublade: Link dorthin; wer die Schublade verwaltet, stellt sie in einen eigenen Schrank um. */
+function CabinetChip({ p, onMoved }: { p: ProjectSpec; onMoved: (cabinet: string | null) => void }) {
+  const nav = useNavigate()
+  const qc = useQueryClient()
+  const projects = useQuery({ queryKey: ['projects', 'mine', 'active'], queryFn: () => api.projects(false, false) })
+  const cabinets = (projects.data ?? []).filter((c) => c.kind === 'cabinet')
+  const own = cabinets.filter((c) => c.access?.role === 'owner')
+  const cur = cabinets.find((c) => c.id === p.cabinet_id)
+  const move = useMutation({
+    mutationFn: (to: string | null) => api.setCabinet(p.id, to),
+    onSuccess: (r) => { onMoved(r.cabinet_id ?? null); qc.invalidateQueries({ queryKey: ['projects'] }) },
+  })
+  if (p.access?.role === 'owner' && own.length)
+    return (
+      <span className="inline-flex items-center gap-1">
+        {cur && <button className="btn btn-sm btn-quiet" onClick={() => nav(`/project/${cur.id}`)} title="Zum Schrank"><Dresser size={14} /></button>}
+        <select className="input" style={{ width: 190 }} value={p.cabinet_id ?? ''} onChange={(e) => move.mutate(e.target.value || null)} aria-label="Schrank">
+          <option value="">ohne Schrank</option>
+          {cur && !own.includes(cur) && <option value={cur.id}>{cur.name}</option>}
+          {own.map((c) => <option key={c.id} value={c.id}>Schrank: {c.name}</option>)}
+        </select>
+      </span>
+    )
+  if (!cur) return null
+  return <button className="chip cursor-pointer" onClick={() => nav(`/project/${cur.id}`)}><Dresser size={14} /> {cur.name}</button>
 }

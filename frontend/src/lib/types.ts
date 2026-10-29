@@ -52,7 +52,14 @@ export interface GripRecess { shape: 'stadium' | 'rect' | 'circle'; x: number; y
 /** Schriftzug: Mitte (x, y) in Spec-Koordinaten, size = Höhe der Großbuchstaben (mm) */
 export type TextStyle = 'raised' | 'flush' | 'engraved'
 export interface TextLabel { text: string; x: number; y: number; size: number; rot_deg: number; style: TextStyle; height: number; bold: boolean; color: string }
-export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number | null; polygon?: [number, number][] | null; generated?: boolean }
+export type ShelfSide = 'back' | 'front' | 'left' | 'right'
+/** Fachbeschriftung: mittig auf dem Fachboden oder auf einem Vordach an einer Wand (size null = passend) */
+export interface CompLabel {
+  text: string; size: number | null; bold: boolean; height: number; color: string
+  shelf: boolean; shelf_depth: number; side: ShelfSide; dx: number; dy: number
+}
+export const DEFAULT_COMP_LABEL: CompLabel = { text: '', size: null, bold: true, height: 0.6, color: '#f4f1ea', shelf: false, shelf_depth: 12, side: 'back', dx: 0, dy: 0 }
+export interface Compartment { x: number; y: number; w: number; l: number; radius: number; depth: number | null; polygon?: [number, number][] | null; generated?: boolean; label?: CompLabel | null }
 
 export interface InsertSpec {
   id: string
@@ -106,6 +113,8 @@ export interface LayoutOut {
   grips: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; placement: number | null; rounded: boolean; params: GripRecess | null }[]
   compartments: { z0: number; depth: number; polygons: PolyOut[]; auto: boolean; max_depth: boolean }[]
   texts?: { index: number; style: TextStyle; z0: number; z1: number; color: string; polygons: PolyOut[] }[]
+  comp_labels?: { index: number; z0: number; z1: number; color: string; size: number; polygons: PolyOut[] }[]
+  shelves?: { index: number; side: ShelfSide; z_top: number; polygons: PolyOut[] }[]
   lip?: boolean; text_top?: number
   shift: [number, number]
   zones: { a: number; b: number; floor: number }[][]
@@ -174,6 +183,8 @@ export interface ProjectSpec {
   id: string; name: string; owner_id?: number | null; created_at: string
   drawer: BaseplateSpec; drawer_h: number | null; template: InsertTemplate; placements: DrawerPlacement[]; notes: string
   archived?: boolean; archived_at?: string
+  /** Schrank (fasst Schubladen zusammen) oder Schublade; cabinet_id = Schrank der Schublade (beides setzt nur der Server) */
+  kind?: 'drawer' | 'cabinet'; cabinet_id?: string | null
   /** vom Server: eigene Rolle (owner, member; admin = fremdes Projekt über Admin-Rechte), Besitzer, Anzahl Mitglieder */
   access?: { role: 'owner' | 'member' | 'admin'; owner: string; members: number }
 }

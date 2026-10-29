@@ -38,6 +38,8 @@ def _text_regions(lay: Layout, spec: InsertSpec) -> dict[str, list[cq.Shape]]:
         else:
             z0, z1 = t.z0 - spec.color_skin.floor, t.z1 + 1.0
         out.setdefault(t.spec.color.lower(), []).extend(prism(t.poly, z0, z1))
+    for t in lay.comp_labels:              # Fachbeschriftung: immer erhaben
+        out.setdefault(t.spec.color.lower(), []).extend(prism(t.poly, t.z0 - RAISED_SEAT, t.z1 + 1.0))
     return out
 
 
@@ -49,6 +51,17 @@ def split_color_parts(body: cq.Workplane, lay: Layout, spec: InsertSpec):
     names = {"grip": "Greifmulden", "pocket": "Taschen", "compartment": "Fächer"}
     given: cq.Workplane | None = None
     parts: list[Part] = []
+    # Schrift zuerst: Fachbeschriftungen liegen im Fach (sonst nähme die Fächerhaut sie mit)
+    for color, shapes in _text_regions(lay, spec).items():
+        gr = fuse_all(shapes)
+        part = body.intersect(gr)
+        if given is not None:
+            part = part.cut(given)
+        if not part.solids().vals() or part.val().Volume() < 1e-3:
+            continue
+        n = sum(1 for p in parts if p.group == "text")
+        parts.append(Part("Schrift" if n == 0 else f"Schrift {n + 1}", part, color_palette(spec).index(color) + 1, "text"))
+        given = part if given is None else given.union(part)
     for g in ("grip", "pocket", "compartment"):
         gr = fuse_all(grown[g])
         if gr is None:
@@ -60,16 +73,7 @@ def split_color_parts(body: cq.Workplane, lay: Layout, spec: InsertSpec):
             continue
         parts.append(Part(names[g], part, getattr(slots, g), g))
         given = part if given is None else given.union(part)
-    for color, shapes in _text_regions(lay, spec).items():
-        gr = fuse_all(shapes)
-        part = body.intersect(gr)
-        if given is not None:
-            part = part.cut(given)
-        if not part.solids().vals() or part.val().Volume() < 1e-3:
-            continue
-        n = sum(1 for p in parts if p.group == "text")
-        parts.append(Part("Schrift" if n == 0 else f"Schrift {n + 1}", part, color_palette(spec).index(color) + 1, "text"))
-        given = part if given is None else given.union(part)
     main = body if given is None else body.cut(given)
     parts.insert(0, Part("Körper", main, slots.body, "body"))
+    parts[1:] = sorted(parts[1:], key=lambda p: p.group == "text")      # Reihenfolge wie bisher: Schrift zuletzt
     return parts

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -10,7 +10,7 @@ from shapely.geometry import MultiPolygon, Polygon
 from .. import build_tasks, jobs, storage
 from ..auth import Principal, current_user
 from ..geometry.layout import compute_layout
-from ..schemas import PLUG_MIN_H, InsertSpec
+from ..schemas import PLUG_MIN_H, CompLabel, InsertSpec
 
 router = APIRouter(prefix="/inserts", tags=["inserts"])
 
@@ -48,6 +48,10 @@ def layout_payload(spec: InsertSpec, user: Principal) -> dict:
                           "max_depth": c.free_depth} for c in lay.comps],
         "texts": [{"index": t.index, "style": t.spec.style, "z0": t.z0, "z1": t.z1, "color": t.spec.color,
                    "polygons": _polys(t.poly)} for t in lay.texts],
+        "comp_labels": [{"index": t.index, "z0": t.z0, "z1": t.z1, "color": t.spec.color, "size": t.spec.size,
+                         "polygons": _polys(t.poly)} for t in lay.comp_labels],
+        "shelves": [{"index": sh.comp, "side": sh.side, "z_top": sh.z_top, "polygons": _polys(sh.poly)}
+                    for sh in lay.shelves],
         "lip": lay.lip, "text_top": lay.text_top,
         "shift": list(lay.shift),
         "zones": [[{"a": z.a, "b": z.b, "floor": z.floor} for z in zs] for zs in lay.zones],
@@ -133,6 +137,8 @@ class BinBody(BaseModel):
     rows: int = Field(2, ge=1, le=12)          # Fächer hintereinander (y)
     height_mm: float | None = Field(None, ge=10, le=250)   # None = Standardhöhe bzw. Projektvorlage
     project_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    labels: Annotated[list[Annotated[str, Field(max_length=40)]], Field(max_length=144)] = []   # je Fach (Zeile für Zeile von hinten links)
+    shelf: bool = False                        # Beschriftung auf einem Vordach an der hinteren Wand
 
 
 def grid_comps(spec: InsertSpec, cols: int, rows: int, user: Principal) -> list:
@@ -180,7 +186,14 @@ def create_bin(body: BinBody, user: Principal = Depends(current_user)) -> Insert
     spec = InsertSpec(**kw)
     grid_comps(spec, body.cols, body.rows, user)          # Fächergröße prüfen, bevor etwas angelegt wird
     ins = create(spec, user)
-    ins = ins.model_copy(update={"compartments": grid_comps(ins, body.cols, body.rows, user)})
+    comps = grid_comps(ins, body.cols, body.rows, user)
+    if body.shelf or any(t.strip() for t in body.labels):
+        # Lesereihenfolge: hinten (große y) links beginnen, zeilenweise nach vorn
+        order = sorted(range(len(comps)), key=lambda i: (-round(comps[i].y + comps[i].l / 2), comps[i].x))
+        for k, i in enumerate(order):
+            text = body.labels[k].strip() if k < len(body.labels) else ""
+            comps[i] = comps[i].model_copy(update={"label": CompLabel(text=text, shelf=body.shelf)})
+    ins = ins.model_copy(update={"compartments": comps})
     storage.save_insert(ins)
     return ins
 

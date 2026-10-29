@@ -70,3 +70,19 @@ ihren Einlagen, eine Mustervorlage für die Einstellungen und eine 2D/3D-Ansicht
     Entfernte oder austretende Mitglieder: ihre Einträge im Projekt gehen an den Besitzer über, ihre Bibliothek
     bleibt privat. Gelöschter Besitzer: das Projekt geht an das älteste Mitglied (ohne Mitglieder wird es
     gelöscht). Listen: `?shared=true` liefert zusätzlich die Projektsachen; ohne bleibt die Bibliothek privat.
+13. **Schränke** (`ProjectSpec.kind = "cabinet"`, Schublade: `cabinet_id`; Regeln in `storage.participants`): Ein Schrank
+    fasst Schubladen zusammen. Wer am Schrank beteiligt ist (Besitzer oder Mitglied), ist an allen seinen Schubladen
+    beteiligt; der Schrankbesitzer verwaltet sie mit (`storage.project_owners`: Mitglieder, Archiv, Löschen).
+    Schubladen behalten eigene Mitglieder. Zuordnen (`POST /projects/{id}/cabinet`) darf nur, wer die Schublade
+    verwaltet, und nur in eigene Schränke (sonst bekämen fremde Schrank-Mitglieder ungefragt Zugriff). Einlagen und
+    Werkzeuge liegen nie direkt im Schrank. Admins ordnen Nutzer in der Nutzerverwaltung Schränken wie Schubladen zu.
+    UI: `CabinetPage.tsx`, Projektliste gruppiert nach Schrank.
+14. **Mehrere Werkzeuge je Einlage**: "Werkzeug scannen" im Designer legt ein neues Werkzeug (im Projekt der Einlage)
+    an und öffnet den Scan mit `?insert=<id>`; am Ende legt "In die Einlage legen" es neben die vorhandenen
+    (`placeNew`), Lage und Drehung stellt man danach im Designer ein.
+15. **Fachbeschriftung und Vordach** (`Compartment.label`, `CompLabel`; `layout._comp_labels`, `insert_cad.shelf_solid`):
+    Schrift erhaben mittig auf dem Fachboden oder auf einem Vordach an einer Wand (Standard hinten). Das Vordach ist
+    oben eben, vorn `SHELF_T` = 1,6 mm stark und darunter 45° zur Wand abgeschrägt (druckt ohne Stützen); seine
+    Oberkante liegt um die Schrifthöhe unter der Oberfläche, so bleibt die Einlage stapelbar. Ohne Größe passt sich die
+    Schrift an (Breite bzw. 60 % der Vordachtiefe). Schrift-Farbteile werden vor den Fächern zugeteilt, sonst nähme
+    die Fächerhaut sie mit. Fächer-Einlage anlegen: `labels` (Lesereihenfolge hinten links zuerst) und `shelf`.
